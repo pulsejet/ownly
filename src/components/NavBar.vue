@@ -68,6 +68,24 @@
             </a>
           </li>
         </ul>
+        <p class="menu-label">
+          <a @click="showInvite = !showInvite">
+            <FontAwesomeIcon class="mr-1" :icon="faPlus" size="sm"/>
+            Invite Someone
+          </a>
+          <template v-if="showInvite">
+          <input
+            :class="{ input: true }"
+            inputmode="email"
+            autocomplete="email"
+            type="email"
+            placeholder="name@email.com"
+            v-model="inviteeEmail"
+            @keyup.enter="inviteEmail"
+          />
+            <button class="button mt-1 is-fullwidth" @click="inviteEmail">Invite</button>
+          </template>
+        </p>
       </template>
     </div>
 
@@ -109,9 +127,33 @@ import AddProjectModal from './AddProjectModal.vue';
 
 import { GlobalBus } from '@/services/event-bus';
 import { Toast } from '@/utils/toast';
+import {validateEmail, convertEmailToName} from "@/utils";
 
 import type { IChatChannel, IProject, IProjectFile } from '@/services/types';
 
+const inviteeEmail = ref(String());
+const showInvite = ref(false);
+
+function inviteEmail() {
+  console.log(inviteeEmail.value);
+  if (!showInvite.value) {
+    return;
+  }
+
+  if (!inviteeEmail.value) {
+    console.error("Email invite submitted without value");
+    return;
+  }
+
+  if (!validateEmail(inviteeEmail.value)) {
+    console.error("invited email is not valid");
+    return;
+  }
+  const converted = convertEmailToName(inviteeEmail.value);
+  console.log(converted);
+  showInvite.value = false;
+  return true;
+}
 const route = useRoute();
 const routeIsDashboard = computed(() => route.name === 'dashboard');
 const routeIsWorkspace = computed(() =>
