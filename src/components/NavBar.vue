@@ -69,6 +69,7 @@
           </li>
         </ul>
         <p class="menu-label">
+          <template v-if=isOwner()>
           <a @click="showInvite = !showInvite">
             <FontAwesomeIcon class="mr-1" :icon="faPlus" size="sm"/>
             Invite Someone
@@ -84,6 +85,7 @@
             @keyup.enter="inviteEmail"
           />
             <button class="button mt-1 is-fullwidth" @click="inviteEmail">Invite</button>
+          </template>
           </template>
         </p>
       </template>
@@ -130,6 +132,15 @@ import { Toast } from '@/utils/toast';
 import {validateEmail, convertEmailToName} from "@/utils";
 
 import type { IChatChannel, IProject, IProjectFile } from '@/services/types';
+
+function isOwner() {
+  const a = globalThis.ActiveWorkspace?.metadata.owner;
+  if (a == null) {
+    return false;
+  } else {
+    return a;
+  }
+}
 
 const inviteeEmail = ref(String());
 const showInvite = ref(false);
