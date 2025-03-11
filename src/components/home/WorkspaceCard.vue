@@ -9,32 +9,65 @@
         </div>
 
         <div class="media-content">
-          <p class="title is-4 has-text-weight-semibold">{{ name }}</p>
-          <p class="subtitle is-6 mt-1">{{ subtitle }}</p>
+          <p class="title is-4 has-text-weight-semibold">{{ metadata.label }}</p>
+          <p class="subtitle is-6 mt-1">{{ metadata.name }}</p>
         </div>
+
+        <button
+          ref="button"
+          class="button circle-button"
+          @click.stop.prevent="wkspMenu?.open($event)"
+        >
+          <FontAwesomeIcon :icon="faEllipsisV" size="sm" />
+          <DropdownMenu ref="wkspMenu">
+            <a class="dropdown-item" @click="showLeave = true"> Leave </a>
+          </DropdownMenu>
+        </button>
       </div>
 
       <div class="content has-text-right">
-        <button class="button is-primary is-small-caps soft-if-dark" @click="launch">
+        <button class="button is-primary mr-2 is-small-caps soft-if-dark" @click="launch">
           Launch Workspace
         </button>
       </div>
     </div>
+
+    <LeaveWorkspaceModal
+      :show="showLeave"
+      :target="metadata.name"
+      @close="showLeave = false"
+      @leave="emit('leave')"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, useTemplateRef } from 'vue';
+
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
+import { faEllipsisV } from '@fortawesome/free-solid-svg-icons';
+
+import DropdownMenu from '@/components/DropdownMenu.vue';
+import LeaveWorkspaceModal from '@/components/home/LeaveWorkspaceModal.vue';
+
 import * as utils from '@/utils';
 
+import type { PropType } from 'vue';
+import type { IWkspStats } from '@/services/types';
+
+const showLeave = ref(false);
+
 const props = defineProps({
-  name: String,
-  subtitle: String,
+  metadata: {
+    type: Object as PropType<IWkspStats>,
+    required: true,
+  },
 });
 
-const emit = defineEmits(['open']);
+const emit = defineEmits(['open', 'leave']);
 
-const avatar = ref<string>(utils.makeAvatar(props.name ?? 'wksp', 'shapes'));
+const avatar = ref<string>(utils.makeAvatar(props.metadata.name ?? 'wksp', 'shapes'));
+const wkspMenu = useTemplateRef('wkspMenu');
 
 function launch() {
   emit('open');

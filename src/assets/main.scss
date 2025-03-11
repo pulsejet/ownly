@@ -35,6 +35,9 @@ html {
   .is-primary.soft-if-dark {
     background-color: var(--bulma-primary-soft) !important;
   }
+  .is-warning.soft-if-dark {
+    background-color: var(--bulma-warning-soft) !important;
+  }
 
   * {
     scrollbar-color: rgba(255, 255, 255, 0.2) transparent;

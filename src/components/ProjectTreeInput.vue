@@ -23,7 +23,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, useTemplateRef } from 'vue';
 
 import { faTimes, faCheck } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
@@ -42,7 +42,7 @@ const emit = defineEmits<{
 }>();
 
 const value = ref<string>(props.name);
-const input = ref<HTMLInputElement | null>(null);
+const input = useTemplateRef('input');
 
 onMounted(() => {
   input.value?.scrollIntoView({ behavior: 'smooth' });

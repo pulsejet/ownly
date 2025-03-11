@@ -3,7 +3,6 @@ import { WorkspaceProj, WorkspaceProjManager } from './workspace-proj';
 
 import { SvsProvider } from '@/services/svs-provider';
 
-import stats from '@/services/stats';
 import ndn from '@/services/ndn';
 import { GlobalBus } from '@/services/event-bus';
 import * as utils from '@/utils/index';
@@ -89,15 +88,14 @@ export class Workspace {
     space = utils.unescapeUrlName(space);
 
     // Get workspace configuration from storage
-    const metadata = await stats.db.workspaces.get(space);
+    const metadata = await _o.stats.get(space);
     if (!metadata) {
       throw new Error(`Workspace not found, have you joined it? <br/> [${space}]`);
     }
 
     // Store last access time
-    stats.db.workspaces.update(space, {
-      lastAccess: Date.now(),
-    }); // background
+    metadata.lastAccess = Date.now();
+    _o.stats.put(space, metadata); // background
 
     // Start workspace if not already active
     if (globalThis.ActiveWorkspace?.metadata.name !== metadata.name) {

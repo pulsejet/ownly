@@ -12,6 +12,7 @@ import (
 	enc "github.com/named-data/ndnd/std/encoding"
 	"github.com/named-data/ndnd/std/log"
 	"github.com/named-data/ndnd/std/ndn"
+	spec "github.com/named-data/ndnd/std/ndn/spec_2022"
 	"github.com/named-data/ndnd/std/ndn/svs_ps"
 	"github.com/named-data/ndnd/std/object"
 	"github.com/named-data/ndnd/std/security"
@@ -276,6 +277,30 @@ func (a *App) SvsAloJs(client ndn.Client, alo *ndn_sync.SvsALO, persistState js.
 			return js.ValueOf(name.String()), nil
 		}),
 
+		// pub_blob_fetch(name: string): Promise<string>;
+		"pub_blob_fetch": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			// This message is special, in the sense that it is purely intended for repo.
+			// So subscribers will never see this message.
+			blobName, err := enc.NameFromStr(p[0].String())
+			if err != nil {
+				return nil, err
+			}
+			cmd := spec_repo.RepoCmd{
+				BlobFetch: &spec_repo.BlobFetch{
+					Name: &spec.NameContainer{Name: blobName},
+				},
+			}
+			blobName, state, err := alo.Publish(cmd.Encode())
+			if err != nil {
+				return nil, err
+			}
+
+			// Persist state
+			jsutil.Await(persistState.Invoke(jsutil.SliceToJsArray(state.Join())))
+
+			return js.ValueOf(blobName.String()), nil
+		}),
+
 		// subscribe(name: string, { on_yjs_delta }): Promise<void>;
 		"subscribe": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
 			// Send a list of publications to the JS callback
@@ -297,7 +322,9 @@ func (a *App) SvsAloJs(client ndn.Client, alo *ndn_sync.SvsALO, persistState js.
 							"binary": jsutil.SliceToJsArray(pmsg.YjsDelta.Binary),
 						}))
 					default:
-						log.Error(nil, "Unknown message type", "msg", pmsg)
+						// This will be logged even for BlobFetch commands, which is fine
+						// (can be fixed but avoid the extra parse that is unused)
+						log.Warn(nil, "Ignoring unknown message")
 					}
 				}
 
@@ -386,8 +413,8 @@ func (a *App) NotifyRepo(client ndn.Client, group enc.Name) {
 	// Notify repo to join SVS group
 	repoCmd := spec_repo.RepoCmd{
 		SyncJoin: &spec_repo.SyncJoin{
-			Protocol: spec_repo.SyncProtocolSvsV3,
-			Group:    group,
+			Protocol: &spec.NameContainer{Name: spec_repo.SyncProtocolSvsV3},
+			Group:    &spec.NameContainer{Name: group},
 			HistorySnapshot: &spec_repo.HistorySnapshotConfig{
 				Threshold: SnapshotThreshold,
 			},

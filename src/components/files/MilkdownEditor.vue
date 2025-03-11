@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch, type PropType } from 'vue';
+import { onBeforeUnmount, onMounted, useTemplateRef, watch, type PropType } from 'vue';
 
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness.js';
@@ -25,7 +25,7 @@ const props = defineProps({
   },
 });
 
-const outer = ref<InstanceType<typeof HTMLDivElement> | null>(null);
+const outer = useTemplateRef('outer');
 
 let crepe: Crepe | null = null;
 let collabService: CollabService | null = null;

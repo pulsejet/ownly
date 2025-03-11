@@ -2,7 +2,7 @@
   <button
     ref="button"
     class="button"
-    @click.stop.prevent="$refs.dropdown!.open($event)"
+    @click.stop.prevent="dropdown?.open($event)"
     title="Update contents of this node"
   >
     <FontAwesomeIcon class="mr-1" :icon="faCaretDown" size="2xs" />
@@ -29,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, useTemplateRef } from 'vue';
 
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import { faCaretDown } from '@fortawesome/free-solid-svg-icons';
@@ -51,8 +51,8 @@ const emit = defineEmits<{
   (e: 'delete'): void;
 }>();
 
-const button = ref<HTMLElement | null>(null);
-const dropdown = ref<InstanceType<typeof DropdownMenu> | null>(null);
+const button = useTemplateRef('button');
+const dropdown = useTemplateRef('dropdown');
 
 // This is a bit ugly, but simplifies the parent component
 // Attach to the parent's context menu event here and trigger the dropdown

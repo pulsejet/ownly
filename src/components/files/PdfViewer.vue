@@ -57,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, shallowRef, watch } from 'vue';
+import { onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue';
 
 import LoadingSpinner from '@/components/LoadingSpinner.vue';
 
@@ -67,8 +67,6 @@ import 'vue-pdf-embed/dist/styles/textLayer.css';
 
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import { faMinus, faPlus } from '@fortawesome/free-solid-svg-icons';
-
-import streamSaver from 'streamsaver';
 
 defineEmits(['compile']);
 
@@ -99,7 +97,7 @@ const props = defineProps({
   },
 });
 
-const pdfviewer = ref<InstanceType<typeof HTMLDivElement> | null>(null);
+const pdfviewer = useTemplateRef('pdfviewer');
 const width = ref(0);
 const loaded = ref(false);
 const pdfCopy = shallowRef<Uint8Array | null>(null);
@@ -121,7 +119,7 @@ function create() {
 
 async function download() {
   if (!props.pdf) return;
-  const fileStream = streamSaver.createWriteStream(props.basename);
+  const fileStream = _o.streamSaver.createWriteStream(props.basename);
   const writer = fileStream.getWriter();
   await writer.write(props.pdf);
   await writer.close();

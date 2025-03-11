@@ -39,7 +39,7 @@
         />
       </component>
 
-      <project-tree
+      <ProjectTree
         ref="subtrees"
         v-if="isFolderOpen(entry)"
         :project="props.project"
@@ -60,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch, type PropType } from 'vue';
+import { computed, nextTick, onMounted, ref, useTemplateRef, watch, type PropType } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import * as zip from '@zip.js/zip.js';
@@ -121,7 +121,8 @@ const props = defineProps({
 const route = useRoute();
 const router = useRouter();
 
-const subtrees = ref<InstanceType<any>>();
+// vue-tsc is currently broken for the type inference
+const subtrees = useTemplateRef<Array<any>>('subtrees');
 
 const newFile = ref({
   show: false,
@@ -264,7 +265,7 @@ function onSubtree(subfolder: TreeEntry, callback: (subtree: any) => void) {
   if (!subfolder.is_folder) return;
   openFolder(subfolder, true);
   nextTick(() => {
-    const subtree = subtrees.value?.find((t: any) => t?.parent === subfolder.name);
+    const subtree = subtrees.value?.find((t) => t?.parent === subfolder.name);
     if (subtree) callback(subtree);
   });
 }

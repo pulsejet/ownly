@@ -74,7 +74,7 @@ onMounted(async () => {
     // Load the file into the OPFS
     if (isImage || isPdf) {
       const proj = await Workspace.setupAndGetActiveProj(router);
-      const path = await proj.syncFs(props.path);
+      const path = await proj.syncFs({ path: props.path });
       const handle = await opfs.getFileHandle(path);
       const file = await handle.getFile();
 

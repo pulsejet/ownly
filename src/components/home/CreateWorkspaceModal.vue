@@ -43,7 +43,6 @@ import { ref } from 'vue';
 
 import ModalComponent from '../ModalComponent.vue';
 
-import stats from '@/services/stats';
 import ndn from '@/services/ndn';
 import { Toast } from '@/utils/toast';
 
@@ -72,7 +71,7 @@ async function create() {
 
     const name = await ndn.api.create_workspace(opts.value.name);
 
-    await stats.db.workspaces.put({
+    await _o.stats.put(name, {
       label: opts.value.label,
       name: name,
       owner: true,

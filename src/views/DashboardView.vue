@@ -36,7 +36,7 @@
           </div>
 
           <!-- Normal workspace card -->
-          <WorkspaceCard v-else :name="ws.label" :subtitle="ws.name" @open="open(ws)" />
+          <WorkspaceCard v-else :metadata="ws" @open="open(ws)" @leave="refreshList" />
         </template>
       </div>
     </div>
@@ -51,13 +51,11 @@ import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import CreateWorkspaceModal from '@/components/home/CreateWorkspaceModal.vue';
+import JoinWorkspaceModal from '@/components/home/JoinWorkspaceModal.vue';
 import WorkspaceCard from '@/components/home/WorkspaceCard.vue';
 
-import stats from '@/services/stats';
-import * as utils from '@/utils/index';
-
+import * as utils from '@/utils';
 import type { IWkspStats } from '@/services/types';
-import JoinWorkspaceModal from '@/components/home/JoinWorkspaceModal.vue';
 
 const router = useRouter();
 
@@ -66,7 +64,7 @@ const showJoin = ref(false);
 const workspaces = ref([] as IWkspStats[]);
 
 async function refreshList() {
-  workspaces.value = await stats.db.workspaces.toArray();
+  workspaces.value = await _o.stats.list();
   workspaces.value.sort((a, b) => {
     return (b.lastAccess ?? 0) - (a.lastAccess ?? 0);
   });

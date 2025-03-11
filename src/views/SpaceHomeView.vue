@@ -41,7 +41,6 @@ import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import LoadingSpinner from '@/components/LoadingSpinner.vue';
 
 import { Workspace } from '@/services/workspace';
-import stats from '@/services/stats';
 
 const router = useRouter();
 
@@ -94,10 +93,9 @@ Invite people to your workspace to start collaborating!
     }
 
     // Mark setup as complete
-    await stats.db.workspaces.update(wksp.value.metadata.name, {
-      pendingSetup: false,
-    });
-    wksp.value.metadata.pendingSetup = false;
+    const metadata = wksp.value.metadata;
+    metadata.pendingSetup = false;
+    await _o.stats.put(metadata.name, metadata);
   }
 }
 </script>

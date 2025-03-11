@@ -10,7 +10,12 @@ import (
 )
 
 func main() {
-	me := app.NewApp()
+	var me *app.App
+	if js.Global().Get("window").IsUndefined() {
+		me = app.NewNodeApp()
+	} else {
+		me = app.NewApp()
+	}
 
 	api := map[string]any{
 		// has_testbed_key(): Promise<boolean>;

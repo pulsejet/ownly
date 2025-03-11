@@ -2,9 +2,9 @@
 
 import * as Y from 'yjs';
 
-import { StoreDexie, type StoreJS } from './store_js';
-import { KeyChainDexie, type KeyChainJS } from './keychain_js';
-import { GlobalBus } from './event-bus';
+import { StoreDexie, type StoreJS } from '@/services/database/store_js';
+import { KeyChainDexie, type KeyChainJS } from '@/services/database/keychain_js';
+import { GlobalBus } from '@/services/event-bus';
 
 /* eslint-disable no-var */
 declare global {
@@ -78,6 +78,8 @@ export interface SvsAloApi {
 
   /** Publish chat message to SVS ALO */
   pub_yjs_delta(uuid: string, binary: Uint8Array): Promise<void>;
+  /** Publish blob fetch command */
+  pub_blob_fetch(name: string): Promise<string>;
 
   /** Set SVS ALO subscription callbacks */
   subscribe(params: {
@@ -127,7 +129,17 @@ class NDNService {
 
     // Load the Go WASM module
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('/main.wasm'), go.importObject);
+    let result: WebAssembly.WebAssemblyInstantiatedSource;
+
+    if (typeof window !== 'undefined') {
+      result = await WebAssembly.instantiateStreaming(fetch('/main.wasm'), go.importObject);
+    } else {
+      const fsImport = 'fs/promises';
+      const fs = await import(/* @vite-ignore */ fsImport);
+      // @ts-expect-error - relative path to wasm
+      const buffer = await fs.readFile(import.meta.dirname + '/../../main.wasm');
+      result = await WebAssembly.instantiate(buffer, go.importObject);
+    }
 
     // Callback given by WebAssembly to set the NDN API
     const ndnPromise = new Promise<NDNAPI>((resolve, reject) => {

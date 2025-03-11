@@ -83,7 +83,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  ref,
+  shallowRef,
+  useTemplateRef,
+  watch,
+} from 'vue';
 
 import { useRoute, useRouter } from 'vue-router';
 
@@ -106,8 +115,8 @@ const router = useRouter();
 const channelName = computed(() => route.params.channel as string);
 
 // Element references
-const scroller = ref<InstanceType<typeof DynamicScroller>>();
-const chatbox = ref<HTMLTextAreaElement>();
+const scroller = useTemplateRef<typeof DynamicScroller>('scroller');
+const chatbox = useTemplateRef('chatbox');
 
 // Data state
 const wksp = shallowRef(null as Workspace | null);

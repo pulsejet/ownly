@@ -269,6 +269,9 @@ export class WorkspaceProj {
    * @returns The file content as Uint8Array.
    */
   public async exportFile(path: string): Promise<Uint8Array | null> {
+    console.debug('Exporting file:', path);
+
+    // Validate the path
     if (path.endsWith('/')) {
       throw new Error('Cannot export folder as file');
     }
@@ -402,7 +405,7 @@ export class WorkspaceProj {
    * @param path Path in the project.
    */
   public async download(path: string) {
-    const fsPath = await this.syncFs(path);
+    const fsPath = await this.syncFs({ path });
     if (fsPath.endsWith('/')) {
       const handle = await opfs.getDirectoryHandle(fsPath);
       await opfs.download(handle, {
@@ -431,18 +434,20 @@ export class WorkspaceProj {
   /**
    * Synchronize the project to the OPFS.
    *
-   * @param prefix The prefix to synchronize, relative path in the project.
-   *
    * @returns The path to the project in the OPFS + prefix.
    */
-  public async syncFs(prefix: string = '/'): Promise<string> {
+  public async syncFs(opts?: SyncFsOpts): Promise<string> {
+    let prefix = opts?.path ?? '/';
+
+    // Check if this is a single file to sync
     if (prefix[prefix.length - 1] !== '/') {
-      return this.syncFsFile(prefix);
+      return this.syncFsFile(opts);
     }
 
     // Get the folder in the FS
     prefix = utils.normalizePath(prefix);
-    const basedir = `${this.manager.group}/${this.uuid}`;
+    const basepdir = opts?.useProjectName ? this.name : this.uuid;
+    const basedir = `${this.manager.group}/${basepdir}`;
     const folder = await opfs.getDirectoryHandle(basedir + prefix, { create: true });
 
     // TODO: show progress
@@ -515,10 +520,11 @@ export class WorkspaceProj {
 
   /**
    * Sync a single file in the OPFS.
-   *
-   * @param path Path to the file in the project.
    */
-  private async syncFsFile(path: string): Promise<string> {
+  private async syncFsFile(opts?: SyncFsOpts): Promise<string> {
+    let path = opts?.path ?? '/';
+
+    // Check if this is a folder
     if (path.endsWith('/')) throw new Error('Cannot sync folder as file');
 
     // Get metadata for the file
@@ -527,7 +533,8 @@ export class WorkspaceProj {
     if (!meta) throw new Error(`File not found: ${path}`);
 
     // Get the file in the FS
-    const basedir = `${this.manager.group}/${this.uuid}`;
+    const basepdir = opts?.useProjectName ? this.name : this.uuid;
+    const basedir = `${this.manager.group}/${basepdir}`;
     const folder = await opfs.getDirectoryHandle(basedir, { create: true });
     const fileHandle = await opfs.getFileHandle(path, { create: true, root: folder });
     if (!fileHandle) throw new Error(`File could not be created: ${path}`);
@@ -570,3 +577,11 @@ export class WorkspaceProj {
     });
   }
 }
+
+/** Options for the FileSystem Sync module */
+type SyncFsOpts = {
+  /** The path to synchronize, relative in the project.  */
+  path?: string;
+  /** Use the project name as the folder name in the OPFS, instead of UUID.  */
+  useProjectName?: boolean;
+};

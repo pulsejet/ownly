@@ -28,11 +28,11 @@
                 class="link-button"
                 :allow-new="true"
                 :allow-delete="false"
-                @new-file="$refs.projectTree[0]?.newHere('file', $event)"
-                @new-folder="$refs.projectTree[0]?.newHere('folder')"
-                @import="$refs.projectTree[0]?.importHere()"
-                @import-zip="$refs.projectTree[0]?.importZipHere()"
-                @export="$refs.projectTree[0]?.executeExport(null)"
+                @new-file="projectTree?.[0]?.newHere('file', $event)"
+                @new-folder="projectTree?.[0]?.newHere('folder')"
+                @import="projectTree?.[0]?.importHere()"
+                @import-zip="projectTree?.[0]?.importZipHere()"
+                @export="projectTree?.[0]?.executeExport(null)"
               />
             </router-link>
 
@@ -110,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, useTemplateRef } from 'vue';
 import { useRoute } from 'vue-router';
 
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
@@ -170,6 +170,9 @@ const routeIsDashboard = computed(() => route.name === 'dashboard');
 const routeIsWorkspace = computed(() =>
   ['space-home', 'project', 'discuss', 'project-file'].includes(String(route.name)),
 );
+
+// vue-tsc chokes on this type inference
+const projectTree = useTemplateRef<Array<InstanceType<typeof ProjectTree>>>('projectTree');
 
 const channels = ref([] as IChatChannel[]);
 const showChannelModal = ref(false);

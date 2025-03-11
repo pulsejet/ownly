@@ -236,4 +236,11 @@ function disallowNonNumeric(event: KeyboardEvent) {
     min-width: 350px;
   }
 }
+
+@media (max-width: 1023px) {
+  .wrapper.login {
+    max-width: 400px;
+    margin: 0 auto;
+  }
+}
 </style>

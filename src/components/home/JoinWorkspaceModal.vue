@@ -40,10 +40,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-
 import ModalComponent from '../ModalComponent.vue';
-
-import stats from '@/services/stats';
 import { Toast } from '@/utils/toast';
 
 defineProps({
@@ -72,7 +69,7 @@ async function join() {
     // TODO: fetch label etc from network
     // TODO: Make sure the workspace exists
     // TODO: Check invitation
-    await stats.db.workspaces.put({
+    await _o.stats.put(opts.value.name, {
       label: opts.value.label,
       name: opts.value.name,
       owner: false,
