@@ -4,8 +4,7 @@
     <hr class="logo-sep" />
 
     <div class="header is-size-4">
-      A workspace you <b>Own</b><br />
-      <b>Only</b> you
+      A workspace <b>only</b> you <b>own</b>
     </div>
   </div>
 </template>
