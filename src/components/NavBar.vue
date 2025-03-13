@@ -77,11 +77,23 @@
               Invite people
             </a>
           </li>
+          <li>
+            <a @click="showWkspQr = true">
+              <FontAwesomeIcon class="mr-1" :icon="faQrcode" size="sm" />
+              Share this workspace
+            </a>
+          </li>
         </ul>
       </template>
     </div>
 
     <div class="bottom-sheet">
+      <div class="connection">
+        <a @click="showIdentity = true">
+          <FontAwesomeIcon class="mr-1" :icon="faQrcode" size="sm" />
+          Share your identity
+        </a>
+      </div>
       <div class="connection">
         <template v-if="connState.connected">
           <FontAwesomeIcon class="mr-1" :icon="faWifi" size="sm" />
@@ -97,6 +109,8 @@
     <AddChannelModal :show="showChannelModal" @close="showChannelModal = false" />
     <AddProjectModal :show="showProjectModal" @close="showProjectModal = false" />
     <InvitePeopleModal :show="showInviteModal" @close="showInviteModal = false" />
+    <QRIdentityModal :show="showIdentity" @close="showIdentity = false" />
+    <QRWorkspaceModal :show="showWkspQr" @close="showWkspQr = false" />
   </aside>
 </template>
 
@@ -111,6 +125,7 @@ import {
   faHashtag,
   faWifi,
   faGhost,
+  faQrcode,
 } from '@fortawesome/free-solid-svg-icons';
 
 import ProjectTree from './ProjectTree.vue';
@@ -123,6 +138,8 @@ import { Toast } from '@/utils/toast';
 
 import type { IChatChannel, IProject, IProjectFile } from '@/services/types';
 import InvitePeopleModal from './InvitePeopleModal.vue';
+import QRIdentityModal from './QRIdentityModal.vue';
+import QRWorkspaceModal from './QRWorkspaceModal.vue';
 
 const route = useRoute();
 const routeIsDashboard = computed(() => route.name === 'dashboard');
@@ -133,6 +150,8 @@ const routeIsWorkspace = computed(() =>
 const showChannelModal = ref(false);
 const showProjectModal = ref(false);
 const showInviteModal = ref(false);
+const showIdentity = ref(false);
+const showWkspQr = ref(false);
 
 // vue-tsc chokes on this type inference
 const projectTree = useTemplateRef<Array<InstanceType<typeof ProjectTree>>>('projectTree');
@@ -220,6 +239,7 @@ function linkDiscuss(channel: IChatChannel) {
     .connection {
       border-radius: 50px;
       padding: 5px 12px;
+      margin-top: 7px;
       color: #ddd;
       cursor: pointer;
 
@@ -227,6 +247,10 @@ function linkDiscuss(channel: IChatChannel) {
       background-color: rgba(255, 255, 255, 0.05);
       &:hover {
         background-color: rgba(255, 255, 255, 0.1);
+      }
+
+      a {
+        color: #ddd;
       }
     }
   }

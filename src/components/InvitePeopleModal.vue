@@ -105,7 +105,7 @@ async function send() {
   }
 
   // Finish
-  Toast.success(`Invited ${emailSet.size} addresses to workpace!`);
+  Toast.success(`Invited ${emailSet.size} addresses to workspace!`);
   emit('close');
   emails.value = String();
 }

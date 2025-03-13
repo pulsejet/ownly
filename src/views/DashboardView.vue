@@ -43,6 +43,7 @@
 
     <CreateWorkspaceModal :show="showCreate" @close="showCreate = false" @create="openByName" />
     <JoinWorkspaceModal :show="showJoin" @close="showJoin = false" @join="openByName" />
+    <InviteWorkspaceModal :show="showInvite" :workspaces="workspaces" @close="showInvite = false" />
   </div>
 </template>
 
@@ -56,11 +57,15 @@ import WorkspaceCard from '@/components/home/WorkspaceCard.vue';
 
 import * as utils from '@/utils';
 import type { IWkspStats } from '@/services/types';
+import { Workspace } from '@/services/workspace';
+import { Toast } from '@/utils/toast';
+import InviteWorkspaceModal from '@/components/InviteWorkspaceModal.vue';
 
 const router = useRouter();
 
 const showCreate = ref(false);
 const showJoin = ref(false);
+const showInvite = ref(false);
 const workspaces = ref([] as IWkspStats[]);
 
 async function refreshList() {
@@ -75,8 +80,26 @@ async function refreshList() {
   } as IWkspStats);
 }
 
-onMounted(() => {
+onMounted(async () => {
   refreshList();
+
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get("join") && urlParams.get("label")) {
+    try {
+      const name = decodeURIComponent(urlParams.get("join")!);
+      const label = decodeURIComponent(urlParams.get("label")!);
+
+      const finalName = await Workspace.join(label, name, false);
+      Toast.success('Joined workspace successfully!');
+
+      openByName(finalName);
+    } catch (err) {
+      console.error(err);
+      Toast.error(`${err}`);
+    }
+  } else if (urlParams.get("invite")) {
+    showInvite.value = true;
+  }
 });
 
 function open(ws: IWkspStats) {
@@ -93,6 +116,7 @@ async function openByName(name: string) {
   const ws = workspaces.value.find((w) => w.name === name);
   if (ws) open(ws);
 }
+
 </script>
 
 <style scoped lang="scss">

@@ -80,15 +80,16 @@ export class Workspace {
   /**
    * Setup workspace from URL parameter.
    * @param space Workspace name from URL
+   * @param disableEscape Disables URL escaping if passing in NDN name
    * @returns Workspace object or null if not found
    */
-  public static async setup(space: string): Promise<Workspace> {
+  public static async setup(space: string, disableEscape?: boolean): Promise<Workspace> {
     if (!space) {
       throw new Error('No workspace name provided');
     }
 
     // Unescape URL name
-    space = utils.unescapeUrlName(space);
+    if (!disableEscape) space = utils.unescapeUrlName(space);
 
     // Get workspace configuration from storage
     const metadata = await _o.stats.get(space);
