@@ -1,0 +1,1 @@
+function o(t){return t.$from.parent.type.name==="code_block"}function s(t){var e;const n=(e=t.$from.node(t.$from.depth-1))==null?void 0:e.type;return(n==null?void 0:n.name)==="list_item"}function i(t,e){customElements.get(t)==null&&customElements.define(t,e)}export{s as a,i as d,o as i};
