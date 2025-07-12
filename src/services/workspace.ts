@@ -43,7 +43,7 @@ export class Workspace {
     await ndn.api.connect_testbed();
 
     // Set up client and ALO
-    const api = await ndn.api.get_workspace(metadata.name);
+    const api = await ndn.api.get_workspace(metadata.name, metadata.ignore);
     await api.start();
 
     // Create general SVS group
@@ -167,7 +167,7 @@ export class Workspace {
    * @param wksp Workspace name
    * @param create Create the workspace if it does not exist
    */
-  public static async join(label: string, wksp: string, create: boolean): Promise<string> {
+  public static async join(label: string, wksp: string, create: boolean, ignore: boolean): Promise<string> {
     const metadata = await _o.stats.get(wksp);
     if (metadata) throw new Error('You have already joined this workspace');
 
@@ -182,6 +182,7 @@ export class Workspace {
       label: label,
       name: finalName,
       owner: isOwner,
+      ignore: ignore,
       pendingSetup: create ? true : undefined,
     });
 

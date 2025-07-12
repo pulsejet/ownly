@@ -39,7 +39,7 @@ interface NDNAPI {
   is_workspace_owner(wksp: string): Promise<boolean>;
 
   /** Get a Workspace API */
-  get_workspace(name: string): Promise<WorkspaceAPI>;
+  get_workspace(name: string, ignore: boolean): Promise<WorkspaceAPI>;
 }
 
 export interface WorkspaceAPI {

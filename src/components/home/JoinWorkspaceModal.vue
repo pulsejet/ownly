@@ -93,7 +93,7 @@ async function join() {
     }
 
     // Join the workspace without attempting create
-    const finalName = await Workspace.join(label, name, false);
+    const finalName = await Workspace.join(label, name, false, false);
 
     emit('join', finalName);
     emit('close');

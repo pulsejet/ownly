@@ -20,6 +20,7 @@ import (
 	sig "github.com/named-data/ndnd/std/security/signer"
 	"github.com/named-data/ndnd/std/security/trust_schema"
 	ndn_sync "github.com/named-data/ndnd/std/sync"
+	"github.com/named-data/ndnd/std/types/optional"
 	jsutil "github.com/named-data/ndnd/std/utils/js"
 	"github.com/pulsejet/ownly/ndn/app/tlv"
 )
@@ -163,7 +164,7 @@ func (a *App) IsWorkspaceOwner(wkspStr string) (bool, error) {
 }
 
 // GetWorkspace returns a JS object representing the workspace with the given name.
-func (a *App) GetWorkspace(groupStr string) (api js.Value, err error) {
+func (a *App) GetWorkspace(groupStr string, ignoreValidity bool) (api js.Value, err error) {
 	group, err := enc.NameFromStr(groupStr)
 	if err != nil {
 		return
@@ -250,9 +251,10 @@ func (a *App) GetWorkspace(groupStr string) (api js.Value, err error) {
 			// Fetch the content from the network
 			ch := make(chan ndn.ConsumeState)
 			client.ConsumeExt(ndn.ConsumeExtArgs{
-				Name:     name,
-				TryStore: true,
-				Callback: func(state ndn.ConsumeState) { ch <- state },
+				Name:           name,
+				TryStore:       true,
+				IgnoreValidity: optional.Some(ignoreValidity),
+				Callback:       func(state ndn.ConsumeState) { ch <- state },
 			})
 			state := <-ch
 			if err := state.Error(); err != nil {
@@ -284,14 +286,16 @@ func (a *App) GetWorkspace(groupStr string) (api js.Value, err error) {
 				InitialState: stateWire,
 
 				Svs: ndn_sync.SvSyncOpts{
-					Client:      client,
-					GroupPrefix: svsAloGroup,
+					Client:         client,
+					GroupPrefix:    svsAloGroup,
+					IgnoreValidity: optional.Some(ignoreValidity),
 				},
 
 				Snapshot: &ndn_sync.SnapshotNodeHistory{
-					Client:    client,
-					Threshold: SnapshotThreshold,
-					Compress:  CompressSnapshotYjs,
+					Client:         client,
+					Threshold:      SnapshotThreshold,
+					Compress:       CompressSnapshotYjs,
+					IgnoreValidity: optional.Some(ignoreValidity),
 				},
 
 				MulticastPrefix: multicastPrefix,

@@ -91,7 +91,7 @@ async function create() {
     }
 
     // Join the workspace with attempt to create
-    const finalName = await Workspace.join(label, fullName.value, true);
+    const finalName = await Workspace.join(label, fullName.value, true, false);
 
     emit('create', finalName);
     emit('close');

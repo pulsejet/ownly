@@ -2,7 +2,7 @@ module github.com/pulsejet/ownly/ndn
 
 go 1.23.4
 
-require github.com/named-data/ndnd v1.5.3-0.20250516053421-dc4c14533f50
+require github.com/named-data/ndnd v1.5.3-0.20250712020000-ed6bc2901834
 
 require (
 	github.com/cespare/xxhash v1.1.0 // indirect
