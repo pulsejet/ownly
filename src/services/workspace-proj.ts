@@ -9,6 +9,12 @@ import { nanoid } from 'nanoid';
 
 import type { WorkspaceAPI } from './ndn';
 import type { IBlobVersion, IProject, IProjectFile } from './types';
+import {
+  excalidrawToFile,
+  type ExcalidrawElementYMap,
+  type ExcalidrawFilesYMap,
+} from './excalidraw-types';
+import type { ImportedDataState } from '@excalidraw/excalidraw/data/types';
 
 /**
  * Project manager for the workspace.
@@ -303,6 +309,14 @@ export class WorkspaceProj {
       } else if (utils.isExtensionType(path, 'milkdown')) {
         // https://github.com/pulsejet/ownly/issues/28
         return Y.encodeStateAsUpdateV2(doc);
+      } else if (utils.isExtensionType(path, 'excalidraw')) {
+        const elements: ExcalidrawElementYMap = doc.getMap('elements');
+        const files: ExcalidrawFilesYMap = doc.getMap('files');
+        return toUtf8(
+          JSON.stringify(
+            excalidrawToFile(Array.from(elements.values()), undefined, files.toJSON()),
+          ),
+        );
       }
     } finally {
       doc.destroy();
@@ -332,7 +346,8 @@ export class WorkspaceProj {
     // Check if this is a blob or text file
     const isText = utils.isExtensionType(path, 'code');
     const isMilkdown = utils.isExtensionType(path, 'milkdown');
-    const isBlob = !isText && !isMilkdown;
+    const isExcalidraw = utils.isExtensionType(path, 'excalidraw');
+    const isBlob = !isText && !isMilkdown && !isExcalidraw;
 
     // Get the existing file if present
     let meta = this.fileMap.get(path);
@@ -386,6 +401,32 @@ export class WorkspaceProj {
           // https://github.com/pulsejet/ownly/issues/28
           Y.applyUpdateV2(doc, new Uint8Array(buffer));
         }
+      } finally {
+        // TODO: if the doc is already open, we should not destroy it
+        // Or use some better technique like reference counting
+        doc.destroy();
+      }
+      return;
+    }
+
+    // Import excalidraw figure JSON
+    if (isExcalidraw) {
+      const buffer = await new Response(content).arrayBuffer();
+      const doc = await this.getFile(path);
+      try {
+        const jsonContent = JSON.parse(new TextDecoder().decode(buffer)) as ImportedDataState;
+        const elements: ExcalidrawElementYMap = doc.getMap('elements');
+        const files: ExcalidrawFilesYMap = doc.getMap('files');
+        doc.transact(() => {
+          elements.clear();
+          for (const ele of jsonContent.elements ?? []) {
+            elements.set(ele.id, JSON.parse(JSON.stringify(ele)));
+          }
+          files.clear();
+          for (const [fid, file] of Object.entries(jsonContent.files ?? {})) {
+            files.set(fid, JSON.parse(JSON.stringify(file)));
+          }
+        });
       } finally {
         // TODO: if the doc is already open, we should not destroy it
         // Or use some better technique like reference counting
@@ -499,7 +540,7 @@ export class WorkspaceProj {
           const relpath = path.substring(prefix.length);
           const fileHandle = await opfs.getFileHandle(relpath, { create: true, root: folder });
           if (fileHandle) {
-            await opfs.write(fileHandle, content);
+            await opfs.writeContents(fileHandle, basedir + path, content);
 
             const mtime = (await fileHandle.getFile()).lastModified;
             await this.provider.markSynced(uuid, utime, mtime);
@@ -543,7 +584,7 @@ export class WorkspaceProj {
     // Write the file to the filesystem.
     const content = await this.exportFile(path);
     if (content !== null) {
-      await opfs.write(fileHandle, content);
+      await opfs.writeContents(fileHandle, basedir + path, content);
 
       mtime = (await fileHandle.getFile()).lastModified;
       await this.provider.markSynced(meta.uuid, utime, mtime);

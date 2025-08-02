@@ -31,7 +31,7 @@ export class Workspace {
     public readonly chat: WorkspaceChat,
     public readonly proj: WorkspaceProjManager,
     public readonly invite: WorkspaceInviteManager,
-  ) {}
+  ) { }
 
   /**
    * Start the workspace.
@@ -44,7 +44,7 @@ export class Workspace {
     // Set up workspace API and client
     let api: WorkspaceAPI | null = null;
     try {
-      api = await ndn.api.get_workspace(metadata.name);
+      api = await ndn.api.get_workspace(metadata.name, metadata.ignore);
       await api.start();
 
       // Check if we have the encryption keys
@@ -80,6 +80,7 @@ export class Workspace {
     await this.chat.destroy();
     await this.provider?.destroy();
     await this.api?.stop();
+    await this.invite.destroy();
   }
 
   /**
@@ -88,6 +89,15 @@ export class Workspace {
    */
   get username(): string {
     return this.api.name;
+  }
+
+  /**
+   * Get the members of the workspace.
+   * This currently returns the names in the root svs group;
+   * this may not include everyone, e.g. if they never published.
+   */
+  public async getMembers(): Promise<string[]> {
+    return await this.provider.svs.names();
   }
 
   /**
@@ -174,7 +184,7 @@ export class Workspace {
   public static async join(
     label: string,
     wksp: string,
-    create: boolean,
+    create: boolean, ignore: boolean,
     psk: Uint8Array | null,
   ): Promise<string> {
     const metadata = await _o.stats.get(wksp);
@@ -203,6 +213,7 @@ export class Workspace {
       label: label,
       name: finalName,
       owner: isOwner,
+      ignore: ignore,
       pendingSetup: create ? true : undefined,
       psk: utils.toHex(psk),
       dsk: dsk ? utils.toHex(dsk) : null,

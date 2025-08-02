@@ -95,7 +95,7 @@ import * as utils from '@/utils/index';
 import ndn from '@/services/ndn';
 import { Toast } from '@/utils/toast';
 
-const emit = defineEmits(['login']);
+const emit = defineEmits(['login', 'ready']);
 
 const showLoading = ref(true);
 const showEmail = ref(false);
@@ -194,8 +194,22 @@ async function setup() {
     loadStatus.value = 'Setting up NDN service ...';
     await ndn.setup();
 
+    // Connect to testbed
+    await ndn.api.connect_testbed();
+
     // Check if we are already certified
     if (await ndn.api.has_testbed_key()) {
+      // Check if certificate is expiring soon (within a week)
+      const isExpiringSoon = await ndn.api.is_testbed_cert_expiring_soon();
+      if (isExpiringSoon) {
+        console.log('latest certificate is expiring soon');
+        // Certificate is expiring soon, show email page to refresh it
+        showLoading.value = false;
+        showEmail.value = true;
+        emit('ready');
+        return;
+      }
+
       showLoading.value = false;
       showSuccess.value = true;
       setTimeout(() => emit('login'), 250);
@@ -204,6 +218,7 @@ async function setup() {
 
     showLoading.value = false;
     showEmail.value = true;
+    emit('ready');
   } catch (err) {
     console.error(err);
   }

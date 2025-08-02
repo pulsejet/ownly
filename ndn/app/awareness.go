@@ -25,8 +25,8 @@ func (a *Awareness) String() string {
 	return "Awareness"
 }
 
-func (a *Awareness) Start() {
-	a.Client.Engine().AttachHandler(a.Group, func(args ndn.InterestHandlerArgs) {
+func (a *Awareness) Start() error {
+	return a.Client.Engine().AttachHandler(a.Group, func(args ndn.InterestHandlerArgs) {
 		if a.OnData == nil {
 			return
 		}
@@ -52,8 +52,8 @@ func (a *Awareness) Start() {
 	})
 }
 
-func (a *Awareness) Stop() {
-	a.Client.Engine().DetachHandler(a.Name)
+func (a *Awareness) Stop() error {
+	return a.Client.Engine().DetachHandler(a.Group)
 }
 
 func (a *Awareness) Publish(content enc.Wire) error {

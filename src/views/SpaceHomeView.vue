@@ -41,6 +41,7 @@ import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import LoadingSpinner from '@/components/LoadingSpinner.vue';
 
 import { Workspace } from '@/services/workspace';
+import { formTabName } from '@/utils';
 
 const router = useRouter();
 
@@ -52,6 +53,9 @@ onMounted(setup);
 async function setup() {
   wksp.value = await Workspace.setupOrRedir(router);
   if (!wksp.value) return;
+
+  // Update tab name
+  document.title = formTabName(wksp.value.metadata.label);
 
   if (wksp.value.metadata.pendingSetup) {
     showWelcome.value = true;

@@ -6,12 +6,15 @@ import * as utils from '@/utils';
 import type { AwarenessApi, SvsAloApi, WorkspaceAPI } from '@/services/ndn';
 import type { AwarenessLocalState } from '@/services/types';
 import type { ProjDb } from '@/services/database/proj_db';
+import { Bundler } from "@/utils/bundler.ts";
 
 /**
  * Yjs documents backed by an SVS sync group.
  */
 export class SvsProvider {
+  // Maps uuids to doc, bundler, and awareness
   private readonly docs = new Map<string, Y.Doc>();
+  private readonly bundlers = new Map<string, Bundler>;
   private readonly aware = new Map<string, awareProto.Awareness>();
 
   private readonly persistDirty = new Set<string>();
@@ -132,6 +135,18 @@ export class SvsProvider {
     let doc = this.docs.get(uuid);
     if (doc) return doc;
 
+    let bundler = this.bundlers.get(uuid);
+    if (!bundler) {
+      bundler = new Bundler(Y.mergeUpdatesV2,async (update) => {
+        // Publish update to SVS
+        await this.svs.pub_yjs_delta(uuid, update);
+        // Persist the update to IndexedDB
+        return await this.persist([{ uuid, update }]);
+      });
+      // save doc-specific bundler
+      this.bundlers.set(uuid, bundler);
+    }
+    // create new document since it doesn't already exist
     doc = new Y.Doc();
     this.docs.set(uuid, doc);
 
@@ -143,16 +158,14 @@ export class SvsProvider {
       // Ignore updates from self
       if (origin === this) return;
 
-      // Publish the update to SVS
-      await this.svs.pub_yjs_delta(uuid, update);
-
-      // Persist the update to IndexedDB
-      await this.persist([{ uuid, update }]);
+      // Add update to the bundler which will eventually publish to SVS and store in IndexedDB
+      await bundler.produce(update);
     });
 
     // Cleanup on document destroy
     doc.once('destroy', () => {
       this.docs.delete(uuid);
+      this.bundlers.delete(uuid);
       this.aware.delete(uuid);
     });
 

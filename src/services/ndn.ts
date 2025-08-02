@@ -22,6 +22,8 @@ declare global {
 interface NDNAPI {
   /** Check if there is a valid testbed key in the keychain */
   has_testbed_key(): Promise<boolean>;
+  /** Check if the testbed certificate is expiring soon (within a week) */
+  is_testbed_cert_expiring_soon(): Promise<boolean>;
   /** Get the user's identity key */
   get_identity_name(): Promise<string>;
 
@@ -37,7 +39,7 @@ interface NDNAPI {
   is_workspace_owner(wksp: string): Promise<boolean>;
 
   /** Get a Workspace API */
-  get_workspace(name: string): Promise<WorkspaceAPI>;
+  get_workspace(name: string, ignore: boolean): Promise<WorkspaceAPI>;
 }
 
 export interface WorkspaceAPI {
@@ -85,7 +87,9 @@ export interface SvsAloApi {
   /** Stop the SVS instance */
   stop(): Promise<void>;
   /** Set the error callback */
-  set_on_error(): Promise<void>;
+  set_on_error(): void;
+  /** Get list of names in the group */
+  names(): Promise<string[]>;
 
   /** Publish chat message to SVS ALO */
   pub_yjs_delta(uuid: string, binary: Uint8Array): Promise<void>;

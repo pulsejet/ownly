@@ -7,12 +7,16 @@
 #owner: "ndn"/owner20/owner21
 #owner: "ndn"/owner30/owner31/owner32
 #owner: "ndn"/owner40/owner41/owner42/owner43
+#owner: "ndn"/owner50/owner51/owner52/owner53/owner54
+#owner: "ndn"/owner60/owner61/owner62/owner63/owner64/owner65
 
 // Name of user
 #user: "ndn"/user10
 #user: "ndn"/user20/user21
 #user: "ndn"/user30/user31/user32
 #user: "ndn"/user40/user41/user42/user43
+#user: "ndn"/user50/user51/user52/user53/user54
+#user: "ndn"/user60/user61/user62/user63/user64/user65
 
 // Only owner can sign all user certificates
 // The delegation will happen using a separate CrossSchema

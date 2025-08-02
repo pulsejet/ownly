@@ -32,6 +32,7 @@ import { Workspace } from '@/services/workspace';
 import { Toast } from '@/utils/toast';
 
 import type { WorkspaceProj } from '@/services/workspace-proj';
+import { formTabName } from '@/utils';
 
 const route = useRoute();
 const router = useRouter();
@@ -49,6 +50,9 @@ async function setup() {
 
     proj.value = await wksp.proj.get(projName.value);
     if (!proj.value) return;
+
+    // Update tab name
+    document.title = formTabName(wksp.metadata.label);
 
     await proj.value.activate();
   } catch (err) {

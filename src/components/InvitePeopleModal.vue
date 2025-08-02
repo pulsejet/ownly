@@ -12,17 +12,69 @@
       <code class="select-all link">{{ inviteLink }}</code>
     </p>
 
-    <p class="mt-2">Enter upto 100 email addresses or NDN names below, one on each line</p>
+    <p class="mt-2">Enter an email address or NDN name below</p>
 
     <div class="field mt-2">
-      <textarea
-        class="textarea"
-        rows="8"
-        :placeholder="`name@example.com\n/ndn/user-name`"
-        autofocus
-        v-model="emails"
-        :disabled="!isOwner"
-      ></textarea>
+      <input class="input" type="text" :placeholder="`name@example.com or /ndn/user-name`" v-model="inviteInput"
+        :disabled="!isOwner" @keydown.enter.prevent="addInvitees(inviteInput)" @paste="addInviteesOnPaste" autofocus />
+    </div>
+
+    <div class="invitee-management">
+      <div class="title is-6 mb-4">
+        People with Access to this Workspace ({{ invitees.length }}<span v-if="pendingInvitees.length > 0"> + {{
+          pendingInvitees.length }}</span>)
+        <button class="button invitee-list-action" @click="pasteInviteeList"
+          title="Import invitee profiles from clipboard">
+          <FontAwesomeIcon :icon="faClipboard" />
+        </button>
+        <button class="button invitee-list-action" @click="copyInviteeList" title="Copy invitee profiles">
+          <FontAwesomeIcon :icon="faCopy" />
+        </button>
+      </div>
+      <DynamicScroller class="scroller" ref="scroller" :items="allInvitees" :min-item-size="10" key-field="name">
+        <template #default="{ item, index, active }">
+          <DynamicScrollerItem :item="item" :active="active" :data-index="index" class="invitee-profile">
+            <div :class="{
+              'px-4': true,
+              'pt-2': true,
+              'pb-2': true,
+              pending: item.pending,
+            }">
+              <div class="holder">
+                <div class="avatar">
+                  <img :src="utils.makeAvatar(item.name)" :key="item.name" alt="avatar" />
+                </div>
+
+                <div class="Info">
+                  <div class="header">
+                    <span class="name">{{ item.name }}</span>
+                  </div>
+
+                  <div class="email" v-if="item.email">{{ item.email }}</div>
+                </div>
+
+                <div class="badge" v-if="item.pending">
+                  Will be invited
+                </div>
+                <div class="badge" v-else-if="item.owner">
+                  Owner
+                </div>
+                <div class="badge" v-else>
+                  Member
+                </div>
+
+                <button class="button invitee-list-action" v-if="item.pending"
+                  @click="removeInvitee(item.name)" title="Remove this pending invitee">
+                  <FontAwesomeIcon :icon="faXmark" />
+                </button>
+                <button class="button invitee-list-action" v-else @click="() => { /*TODO: menu*/ }" title="Menu" disabled="true">
+                  <FontAwesomeIcon :icon="faBars" />
+                </button>
+              </div>
+            </div>
+          </DynamicScrollerItem>
+        </template>
+      </DynamicScroller>
     </div>
 
     <p v-if="!isOwner" class="has-text-danger has-text-weight-semibold mt-2">
@@ -32,23 +84,34 @@
     <div class="field has-text-right mt-2">
       <div class="control">
         <button class="button mr-2" @click="emit('close')">Cancel</button>
-        <button class="button is-primary soft-if-dark" @click="send" :disabled="!isOwner">
+        <button class="button is-primary soft-if-dark mr-2" @click="send"
+          :disabled="!isOwner || pendingInvitees.length == 0">
           Invite
         </button>
       </div>
     </div>
+
+    <div class="title is-6 mb-4">Current Workspace Members</div>
+    This list currenly only shows members who have published messages in discussions.
+    <p v-if="members.length > 0" class="mt-4">
+      <code>{{ members.join('\n') }}</code>
+    </p>
   </ModalComponent>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from 'vue';
+import { computed, ref, shallowRef, useTemplateRef, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
+import { DynamicScroller, DynamicScrollerItem } from 'vue-virtual-scroller';
 import ModalComponent from './ModalComponent.vue';
 
 import * as utils from '@/utils';
 import { Workspace } from '@/services/workspace';
 import { Toast } from '@/utils/toast';
+import type { IProfile } from '@/services/types';
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
+import { faBars, faClipboard, faCopy, faXmark } from '@fortawesome/free-solid-svg-icons';
 
 const props = defineProps({
   show: {
@@ -59,10 +122,39 @@ const props = defineProps({
 const emit = defineEmits(['close']);
 const router = useRouter();
 
+// Element references
+const scroller = useTemplateRef<typeof DynamicScroller>('scroller');
+
 const wksp = shallowRef<Workspace | null>(null);
 const inviteLink = ref(String());
-const emails = ref(String());
+const inviteInput = ref(String())
 const isOwner = computed(() => !!wksp.value?.metadata.owner);
+const members = ref([] as string[]);
+const invitees = ref([] as IProfile[]);
+const pendingInvitees = ref([] as IProfile[]);
+
+const allInvitees = computed(() => {
+  return [
+    ...pendingInvitees.value.map(profile => ({ ...profile, pending: true })),
+    ...invitees.value.map(profile => ({ ...profile, pending: false })),
+  ].sort((a, b) => {
+    // Pending always on top
+    if (a.pending && !b.pending) return -1;
+    else if (!a.pending && b.pending) return 1;
+
+    // Within pending, sort by name
+    if (a.pending && b.pending) {
+      return a.name.localeCompare(b.name);
+    }
+
+    // Within non-pending, owners at the bottom
+    if (a.owner && !b.owner) return 1;
+    else if (!a.owner && b.owner) return -1;
+
+    // Otherwise, sort by name
+    return a.name.localeCompare(b.name);
+  });
+});
 
 // Do not use the onMounted hook since this component is always mounted
 // in the sidebar (the inner modal has the v-if directive)
@@ -72,57 +164,121 @@ watch(
     wksp.value = await Workspace.setupOrRedir(router);
     if (!wksp.value) return;
 
+    invitees.value = wksp.value.invite.getInviteArray();
+    pendingInvitees.value.length = 0; // clear pending invitees
+
     inviteLink.value = await wksp.value.invite.getJoinLink(router);
+    members.value = await wksp.value.getMembers();
   },
 );
 
+// Copy invitee list (including pending ones) to clipboard
+// Use comma as delimiters
+async function copyInviteeList() {
+  navigator.clipboard.writeText(
+    allInvitees.value.map((profile) => {
+      if (profile.email) {
+        return `${profile.email}`;
+      } else {
+        return `${profile.name}`;
+      }
+    }).toString()
+  )
+  Toast.success(`Copied ${allInvitees.value.length} users to clipboard!`);
+}
+
+// Paste invitee list from clipboard, overwriting existing pending invitees
+async function pasteInviteeList() {
+  const clipboardText = await navigator.clipboard.readText();
+  addInvitees(clipboardText);
+  Toast.success(`Added ${pendingInvitees.value.length} users to invitation list`);
+}
+
+// Remove an invitee from the pending list
+function removeInvitee(name: string) {
+  const index = pendingInvitees.value.findIndex((profile) => profile.name === name);
+  if (index !== -1) {
+    pendingInvitees.value.splice(index, 1);
+  }
+}
+
+// Wrapper for addInvitees - allows quick paste into the input field
+function addInviteesOnPaste(event: ClipboardEvent) {
+  const pasted = event.clipboardData?.getData('text') || '';
+  addInvitees(pasted);
+  event.preventDefault();
+}
+
+// Add invitees to the pending list
+// Wrapper for addInvitee - allows multiple invitees to be added at once
+function addInvitees(input: string) {
+  const entries = input.trim().split(/[\s,]+/);
+  for (const entry of entries) {
+    addInvitee(entry); // add the current entry
+  }
+  inviteInput.value = String(); // clear the input field
+}
+
+// Add an invitee to the pending list
+function addInvitee(invitee: string) {
+  // Check maximum invitees per invitation
+  if (pendingInvitees.value.length >= 100) {
+    Toast.error("Maximum of 100 invitees allowed in one time")
+    return;
+  }
+
+  // Transform the entry to a name
+  // Check validity and ignore blank
+  const entry = invitee.trim()
+  if (!entry) return; // blank line
+
+  let new_profile: IProfile;
+
+  // Check if it is an NDN name
+  if (entry.startsWith('/')) {
+    new_profile = { name: entry };
+  } else {
+    // Validate the email address
+    if (!utils.validateEmail(entry)) {
+      Toast.error(`Invalid email address: ${entry}`);
+      return;
+    }
+
+    // Convert email to NDN name
+    const ndnName = utils.convertEmailToNameLegacy(entry);
+
+    // Form profile
+    new_profile = { name: ndnName, email: entry };
+  }
+
+  // Check repetition
+  if (allInvitees.value.some((profile) => profile.name === new_profile.name)) {
+    Toast.error(`${new_profile.name} already in the invitation list`);
+    return;
+  }
+
+  // Add to pending invitee list
+  pendingInvitees.value.push(new_profile);
+}
+
+// Sign the invitations and send them to the server
 async function send() {
   if (!wksp.value) return;
 
-  // Transform entries to names
-  // Check validity and remove blanks and duplicates
-  const nameSet = new Set<string>();
-  for (const rawEntry of emails.value.split('\n')) {
-    const entry = rawEntry.trim();
-    if (!entry) continue; // blank line
-
-    // Check if this is an NDN name directly
-    if (entry.startsWith('/')) {
-      nameSet.add(entry);
-    } else {
-      // Validate the email address
-      if (!utils.validateEmail(entry)) {
-        Toast.error(`Invalid email address: ${entry}`);
-        return;
-      }
-
-      // Convert email to NDN name
-      const ndnName = utils.convertEmailToNameLegacy(entry);
-      nameSet.add(ndnName);
-    }
-  }
-  if (nameSet.size === 0) {
-    Toast.error('No valid email addresses entered');
-    return;
-  } else if (nameSet.size > 100) {
-    Toast.error('Maximum of 100 email addresses allowed');
-    return;
-  }
-
-  for (const ndnName of nameSet) {
+  // Publish invitations
+  for (const invitee of pendingInvitees.value) {
     try {
       // Generate and publish invitation to sync
-      await wksp.value.invite.invite(ndnName);
+      await wksp.value.invite.tryInvite(invitee);
     } catch (err) {
-      Toast.error(`Failed to invite ${ndnName}: ${err}`);
+      Toast.error(`Failed to invite ${invitee.name}: ${err}`);
       return; // rare
     }
   }
 
   // Finish
-  Toast.success(`Invited ${nameSet.size} users to workspace!`);
+  Toast.success(`Invited ${pendingInvitees.value.length} users to workspace!`);
   emit('close');
-  emails.value = String();
 }
 </script>
 
@@ -130,7 +286,75 @@ async function send() {
 .textarea {
   resize: none;
 }
-code.link {
-  word-break: break-all;
+
+.invitee-management {
+  .invitee-list-action {
+    float: right;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    align-self: center;
+  }
+
+  .scroller {
+    flex: 1;
+    overflow-y: auto;
+    max-height: 150px;
+
+    .invitee-profile {
+      &:hover {
+        background-color: rgba(0, 0, 0, 0.03);
+      }
+
+      .pending {
+        .Info {
+          margin-bottom: 0%;
+        }
+      }
+
+      .holder {
+        display: flex;
+        flex-direction: row;
+
+        .avatar {
+          min-width: 36px;
+          max-height: 36px;
+          object-fit: cover;
+          border-radius: 5px;
+          overflow: hidden;
+          margin-right: 10px;
+          transform: translateY(4px); // visual hack
+
+          >img {
+            width: 36px;
+            height: 36px;
+          }
+        }
+
+        .Info {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          font-size: 14px;
+          line-height: 1.5;
+
+          .name {
+            font-weight: bold;
+          }
+
+          .email {
+            white-space: normal;
+          }
+        }
+
+        .badge {
+          margin-left: auto;
+          padding-right: 4%;
+          align-content: center;
+          font-style: italic;
+        }
+      }
+    }
+  }
 }
 </style>

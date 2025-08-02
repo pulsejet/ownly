@@ -44,6 +44,24 @@ import LandingView from '@/views/LandingView.vue';
 import { GlobalBus } from '@/services/event-bus';
 import { Toast } from '@/utils/toast';
 
+import { marked } from 'marked';
+import { markedHighlight } from 'marked-highlight';
+import hljs from 'highlight.js';
+
+// Global setup for marked
+marked.use(
+  { gfm: true },
+  markedHighlight({
+    emptyLangClass: 'hljs',
+    langPrefix: 'hljs language-',
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    highlight(code, lang, _info) {
+      const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+      return hljs.highlight(code, { language }).value;
+    },
+  }),
+);
+
 const route = useRoute();
 const showLogin = ref(true);
 const showNav = ref(false);

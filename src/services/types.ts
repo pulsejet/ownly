@@ -5,6 +5,8 @@ export type IWkspStats = {
   name: string;
   /** Is the current user the owner */
   owner: boolean;
+  /** Workspace ignore certificate lifetime */
+  ignore: boolean;
   /** Workspace is pending initial setup */
   pendingSetup?: boolean;
   /** Last access time */
@@ -69,4 +71,13 @@ export type IBlobVersion = {
   time: number;
   /** Size of the blob */
   size: number;
+};
+
+export type IProfile = {
+  /* NDN name of the user */
+  name: string;
+  /* OPTIONAL: Email address of the user */
+  email?: string;
+  /* OPTIONAL: Whether the user is the owner of the workspace */
+  owner?: boolean;
 };

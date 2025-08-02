@@ -22,6 +22,18 @@
           :error="resultError"
           @compile="compileLatex"
         />
+        <MarkdownViewer
+          v-if="contentIsMarkdown"
+          class="result"
+          :basename="contentBasename"
+          :ytext="contentCode"
+        />
+        <RevealSlidesViewer
+          v-if="contentIsRevealJS"
+          class="result"
+          :basename="contentBasename"
+          :ytext="contentCode"
+        />
       </div>
 
       <template #fallback>
@@ -29,8 +41,20 @@
       </template>
     </Suspense>
 
+    <Suspense v-else-if="contentExcalidrawElements !== null && contentExcalidrawFiles !== null">
+      <ExcalidrawEditor
+        :yeles="contentExcalidrawElements"
+        :yfiles="contentExcalidrawFiles"
+        :name="contentBasename"
+      />
+
+      <template #fallback>
+        <LoadingSpinner class="absolute-center" text="Loading excalidraw editor ..." />
+      </template>
+    </Suspense>
+
     <Suspense v-else-if="contentMilk">
-      <MilkdownEditor :yxml="contentMilk" :awareness="awareness!" />
+      <MilkdownEditor :yxml="contentMilk" :path="filepath" :awareness="awareness!" />
 
       <template #fallback>
         <LoadingSpinner class="absolute-center" text="Loading document editor ..." />
@@ -61,6 +85,7 @@ import { useRoute, useRouter } from 'vue-router';
 
 import * as Y from 'yjs';
 import * as awareProto from 'y-protocols/awareness.js';
+import type { ExcalidrawElementYMap, ExcalidrawFilesYMap } from '@/services/excalidraw-types';
 
 import LoadingSpinner from '@/components/LoadingSpinner.vue';
 const CodeEditor = defineAsyncComponent({
@@ -72,6 +97,12 @@ const MilkdownEditor = defineAsyncComponent({
 const PdfViewer = defineAsyncComponent({
   loader: () => import('@/components/files/PdfViewer.vue'),
 });
+const MarkdownViewer = defineAsyncComponent({
+  loader: () => import('@/components/files/MarkdownViewer.vue'),
+});
+const ExcalidrawEditor = defineAsyncComponent({
+  loader: () => import('@/components/files/ExcalidrawEditor.vue'),
+});
 import BlobView from '@/components/files/BlobView.vue';
 
 import { Workspace } from '@/services/workspace';
@@ -81,6 +112,7 @@ import { Toast } from '@/utils/toast';
 
 import type { WorkspaceProj } from '@/services/workspace-proj';
 import type { IBlobVersion } from '@/services/types';
+import RevealSlidesViewer from '@/components/files/RevealSlidesViewer.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -96,13 +128,17 @@ const awareness = shallowRef<awareProto.Awareness | null>(null);
 
 const contentCode = shallowRef<Y.Text | null>(null);
 const contentMilk = shallowRef<Y.XmlFragment | null>(null);
+const contentExcalidrawElements = shallowRef<ExcalidrawElementYMap | null>(null);
+const contentExcalidrawFiles = shallowRef<ExcalidrawFilesYMap | null>(null);
 const contentBlob = shallowRef<IBlobVersion | null>(null);
 
 // These are refs to prevent ui glitch when switching views
 const contentBasename = ref<string>(String());
 const contentIsLatex = ref<boolean>(false);
+const contentIsRevealJS = ref<boolean>(false);
+const contentIsMarkdown = ref<boolean>(false);
 
-const resultPdf = shallowRef<Uint8Array | null>(null);
+const resultPdf = shallowRef<Uint8Array<ArrayBuffer> | null>(null);
 const resultIsCompiling = ref(false);
 const resultError = ref(String());
 
@@ -118,17 +154,36 @@ async function create() {
   let newContentCode: Y.Text | null = null;
   let newContentMilk: Y.XmlFragment | null = null;
   let newContentBlob: IBlobVersion | null = null;
+  let newContentExcalidrawElements: ExcalidrawElementYMap | null = null;
+  let newContentExcalidrawFiles: ExcalidrawFilesYMap | null = null;
 
   try {
     loading.value = true;
 
-    const newProj = await Workspace.setupAndGetActiveProj(router);
+    const wksp = await Workspace.setupOrRedir(router);
+    if (!wksp) throw new Error('Workspace not found');
+
+    let newProj;
+
+    if (wksp.proj.active) newProj = wksp.proj.active;
+    else {
+      // No active project, try to get it from the URL
+      const projName = router.currentRoute.value.params.project as string;
+      if (!projName) throw new Error('No project name provided');
+
+      newProj = await wksp.proj.get(projName);
+      await newProj.activate();
+    }
+
     if (proj.value?.uuid !== newProj.uuid) await destroy();
     proj.value = newProj;
 
     // Load file metadata
     const metadata = proj.value.getFileMeta(filepath.value);
     if (!metadata) throw new Error(`File not found: ${filepath.value}`);
+
+    // Update tab name
+    document.title = utils.formTabName(wksp.metadata.label);
 
     // Get file path attributes
     const basename = filename.value[filename.value.length - 1];
@@ -149,6 +204,11 @@ async function create() {
       newDoc = await proj.value.getFile(filepath.value);
       newAwareness = await proj.value.getAwareness(filepath.value);
       newContentMilk = newDoc.getXmlFragment('milkdown');
+    } else if (utils.isExtensionType(basename, 'excalidraw')) {
+      // Excalidraw JSON content. We handle elements and files, but leave appstate.
+      newDoc = await proj.value.getFile(filepath.value);
+      newContentExcalidrawElements = newDoc.getMap('elements');
+      newContentExcalidrawFiles = newDoc.getMap('files');
     } else {
       throw new Error(`Unsupported content extension: ${basename}`);
     }
@@ -156,6 +216,13 @@ async function create() {
     // Always update these, since the filename might have changed
     contentBasename.value = basename;
     contentIsLatex.value = utils.isExtensionType(basename, 'latex');
+    if (utils.isExtensionType(basename, 'markdown')) {
+      contentIsRevealJS.value = basename.endsWith('slides.md');
+      contentIsMarkdown.value = !contentIsRevealJS.value;
+    } else {
+      contentIsRevealJS.value = false;
+      contentIsMarkdown.value = false;
+    }
 
     // If the content doc is the same, then do not reset the doc
     // The provider returns the same doc if the file is already loaded
@@ -172,6 +239,8 @@ async function create() {
     awareness.value = newAwareness;
     contentCode.value = newContentCode;
     contentMilk.value = newContentMilk;
+    contentExcalidrawElements.value = newContentExcalidrawElements;
+    contentExcalidrawFiles.value = newContentExcalidrawFiles;
     contentBlob.value = newContentBlob;
   } catch (err) {
     console.error(err);
@@ -188,6 +257,8 @@ async function create() {
 function resetDoc() {
   contentCode.value = null;
   contentMilk.value = null;
+  contentExcalidrawElements.value = null;
+  contentExcalidrawFiles.value = null;
   contentBlob.value = null;
   awareness.value = null;
 
@@ -233,9 +304,11 @@ async function compileLatex() {
   .editor {
     width: 100%;
   }
+
   &:has(.result) > .editor {
     width: 50%;
   }
+
   > .result {
     width: calc(100% - 50%);
   }

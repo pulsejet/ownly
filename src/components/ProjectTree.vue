@@ -240,6 +240,8 @@ function chooseIcon(entry: TreeEntry) {
       return faFilePdf;
     case 'image':
       return faFileImage;
+    case 'excalidraw':
+      return faFileImage;
     default:
       return faFile;
   }

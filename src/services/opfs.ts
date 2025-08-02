@@ -1,62 +1,38 @@
 import * as zip from '@zip.js/zip.js';
+export { getFileHandle, getDirectoryHandle } from './opfs-common.ts';
 
-/**
- * Get handle to a file in OPFS recursively
- * @param path Full path of the file
- * @param content File content
- */
-export async function getFileHandle(
-  path: string,
-  opts?: {
-    create?: boolean;
-    root?: FileSystemDirectoryHandle;
-  },
-): Promise<FileSystemFileHandle> {
-  const parts = path.split('/').filter(Boolean);
-  const folder = parts.slice(0, -1).join('/');
-  const folderHandle = await getDirectoryHandle(folder, {
-    create: opts?.create,
-    root: opts?.root,
-  });
+import { importWorker, transfer } from 'webworker-typed';
+import type MyWorker from './opfs-worker.ts';
 
-  const basename = parts[parts.length - 1];
-  if (!basename) throw new Error('Invalid file path without basename');
-
-  return await folderHandle.getFileHandle(basename, { create: opts?.create });
-}
+const worker = importWorker<typeof MyWorker>(
+  new Worker(new URL('./opfs-worker.ts', import.meta.url), { type: 'module' }),
+);
 
 /**
  * Write to a file and close it
  * @param handle File handle
+ * @param path Full path of file (for Safari)
  * @param content Content to write
  */
-export async function write(handle: FileSystemFileHandle, content: Uint8Array): Promise<void> {
-  const writable = await handle.createWritable();
-  await writable.truncate(0);
-  await writable.write(content);
-  await writable.close();
-}
-
-/**
- * Get directory handle from OPFS recursively
- * @param path Path to the directory
- * @returns Directory handle
- */
-export async function getDirectoryHandle(
+export async function writeContents(
+  handle: FileSystemFileHandle,
   path: string,
-  opts?: {
-    create?: boolean;
-    root?: FileSystemDirectoryHandle;
-  },
-): Promise<FileSystemDirectoryHandle> {
-  let folder = opts?.root ?? (await globalThis._o.getStorageRoot());
-  const parts = path.split('/').filter(Boolean);
-  for (const part of parts) {
-    folder = await folder.getDirectoryHandle(part, {
-      create: opts?.create ?? false,
-    });
+  content: Uint8Array,
+): Promise<number> {
+  // This is not available on Safari, in that case fall back to a WebWorker
+  // with a sync write handle. We do this here so no need to handle anything else
+  // in the worker (i.e. node)
+  if ('createWritable' in handle) {
+    const writable = await handle.createWritable();
+    await writable.truncate(0);
+    await writable.write(content);
+    await writable.close();
+    return content.length;
   }
-  return folder;
+
+  // FileSystemFileHandle should be clonable but that is not the case on Safari
+  // Our only option is to ask downstream to provide a path to the file :(
+  return await worker.writeContents(path, transfer(content.buffer));
 }
 
 /**

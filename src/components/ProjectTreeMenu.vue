@@ -19,6 +19,9 @@
         New Markdown file
       </a>
       <a class="dropdown-item" v-if="allowNew" @click="emit('new-file', 'tex')"> New LaTeX file </a>
+      <a class="dropdown-item" v-if="allowNew" @click="emit('new-file', 'excalidraw')">
+        New Excalidraw file
+      </a>
       <hr class="dropdown-divider" v-if="allowNew" />
 
       <a class="dropdown-item" @click="emit('export')"> Export </a>

@@ -8,6 +8,10 @@ import defines from './defines';
 
 // https://vite.dev/config/
 export default defineConfig({
+  build: {
+    target: ['es2022', 'chrome111', 'edge111', 'firefox111', 'safari16'],
+    chunkSizeWarningLimit: 10240,
+  },
   plugins: [vue(), pwa()],
   resolve: {
     alias: {
@@ -24,7 +28,7 @@ function pwa() {
     registerType: 'autoUpdate',
     includeAssets: ['*.wasm', '*.js', '*.png'],
     workbox: {
-      maximumFileSizeToCacheInBytes: 10485760, // increasing the file size to cached 10mb
+      maximumFileSizeToCacheInBytes: 33554432, // increasing the file size to cached 33.55 (2^25)
       globPatterns: ['**/*.{svg,png,css,html}', 'assets/index*.js', '*.js', '*.wasm'],
     },
 

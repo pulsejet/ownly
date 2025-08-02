@@ -78,6 +78,9 @@ async function refreshList() {
 }
 
 onMounted(async () => {
+  // Update tab name
+  document.title = utils.formTabName('Dashboard');
+
   await refreshList();
 
   if (route.name === 'join') {

@@ -20,6 +20,12 @@
         <p class="menu-label">About</p>
         <ul class="menu-list">
           <li>
+            <router-link to="/about">
+              <FontAwesomeIcon class="mr-1" :icon="faCircleInfo" size="sm" />
+              About</router-link
+            >
+          </li>
+          <li>
             <a href="https://github.com/pulsejet/ownly" target="_blank">
               <FontAwesomeIcon class="mr-1" :icon="faGithub" size="sm" />
               GitHub
@@ -138,6 +144,7 @@ import {
   faGhost,
   faTableCells,
   faQrcode,
+  faCircleInfo,
 } from '@fortawesome/free-solid-svg-icons';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
 
@@ -154,7 +161,9 @@ import InvitePeopleModal from './InvitePeopleModal.vue';
 import QRIdentityModal from './QRIdentityModal.vue';
 
 const route = useRoute();
-const routeIsDashboard = computed(() => ['dashboard', 'join'].includes(String(route.name)));
+const routeIsDashboard = computed(() =>
+  ['dashboard', 'join', 'about'].includes(String(route.name)),
+);
 const routeIsWorkspace = computed(() =>
   ['space-home', 'project', 'discuss', 'project-file'].includes(String(route.name)),
 );

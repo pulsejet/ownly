@@ -1,33 +1,56 @@
 <template>
   <main class="has-background-primary p-2">
-    <LandingLeft class="left" />
-    <LandingLogin class="login" @login="emit('login')" />
+    <div class="landing">
+      <LandingLeft class="left" />
+      <LandingLogin class="login" @login="emit('login')" @ready="loginReady = true" />
+    </div>
+
+    <Transition name="fade-2" mode="out-in">
+      <AboutComponent class="about" v-if="loginReady" />
+    </Transition>
   </main>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue';
+
+import AboutComponent from '@/components/landing/AboutComponent.vue';
 import LandingLeft from '@/components/landing/LandingLeft.vue';
 import LandingLogin from '@/components/landing/LandingLogin.vue';
 
 const emit = defineEmits(['login']);
+
+const loginReady = ref(false);
 </script>
 
 <style scoped lang="scss">
 main {
-  display: flex;
-  flex-direction: column;
   height: 100dvh;
+  box-sizing: border-box;
   width: 100vw;
-}
+  overflow-y: auto;
 
-@media (min-width: 1024px) {
-  main {
+  .landing {
+    display: flex;
     flex-direction: row;
     height: 100dvh;
+    width: 100%;
   }
 
-  .login {
-    flex: 1;
+  .about {
+    transform: translateY(-100px);
+  }
+}
+
+@media (max-width: 1023px) {
+  main .landing {
+    flex-direction: column;
+    height: unset;
+  }
+
+  main .about {
+    transform: translateY(100px);
+    margin-top: 20px;
   }
 }
 </style>

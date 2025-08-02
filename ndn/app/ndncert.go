@@ -54,6 +54,12 @@ func (a *App) NdncertEmail(email string, CodeCb func(status string) string) (err
 		return err
 	}
 
+	// Verfiy the received certificate and fetch the chain
+	_, err = a.verifyTestbedCert(certRes.CertWire, true)
+	if err != nil {
+		return fmt.Errorf("failed to verify issued certificate: %w", err)
+	}
+
 	// Store the certificate and the signer key
 	if err = a.keychain.InsertKey(certRes.Signer); err != nil {
 		return err
