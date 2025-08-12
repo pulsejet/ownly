@@ -122,7 +122,7 @@
       <div class="control">
         <button class="button mr-2" @click="emit('close')">Cancel</button>
         <button class="button is-primary soft-if-dark mr-2" @click="send"
-          :disabled="!isOwner || pendingInvitees.length == 0">
+          :disabled="!isOwner">
           Invite
         </button>
       </div>
