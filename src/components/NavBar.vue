@@ -252,7 +252,11 @@ function linkDiscuss(channel: IChatChannel) {
 }
 
 function setNotification() {
-  if (_access_requests.length > 0)
+  let wkspName = "/" + route.params.space as string
+  while (wkspName.replace("-","/") != wkspName) { // convert dashes to slashes
+    wkspName = wkspName.replace("-","/")
+  }
+  if (_access_requests.filter(a => a[0] == wkspName && a[2] == false).length > 0)
     showNotifBubble.value = true;
   else
     showNotifBubble.value = false;

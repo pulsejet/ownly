@@ -82,7 +82,6 @@ func (a *App) JoinWorkspace(wkspStr_ string, create bool) (wkspStr string, err e
 			Append(enc.NewGenericComponent("root")).
 			Append(enc.NewKeywordComponent("INVITE")).
 			Append(idName...)
-		log.Info(a, "Fetching workspace invite", "name", inviteName)
 
 		// accessRequestPrefix, _ := enc.NameFromStr("/ndn/multicast" + wkspStr) // Uncomment if you want to use multicast
 		accessRequestPrefix, _ := enc.NameFromStr(wkspStr)
@@ -92,9 +91,9 @@ func (a *App) JoinWorkspace(wkspStr_ string, create bool) (wkspStr string, err e
 			Append(enc.NewGenericComponent("root")).
 			Append(enc.NewKeywordComponent("INVITE")).
 			Append(idName...)
-		log.Info(a, "Fetching workspace invite", "name", inviteName)
 
 		// Fetch the invitation from the repo
+		log.Info(a, "Fetching workspace invite from repo", "name", inviteName)
 		ch := make(chan ndn.ExpressCallbackArgs)
 		object.ExpressR(a.engine, ndn.ExpressRArgs{
 			Name: inviteName,
@@ -109,6 +108,7 @@ func (a *App) JoinWorkspace(wkspStr_ string, create bool) (wkspStr string, err e
 		args := <-ch
 		if args.Result != ndn.InterestResultData {
 			// If the invite is not found, request access from the workspace initiator
+			log.Info(a, "Fetching workspace invite from initiator", "name", inviteName)
 			ch2 := make(chan ndn.ExpressCallbackArgs)
 			object.ExpressR(a.engine, ndn.ExpressRArgs{
 				Name: accessRequestName,
@@ -116,7 +116,7 @@ func (a *App) JoinWorkspace(wkspStr_ string, create bool) (wkspStr string, err e
 					MustBeFresh: true,
 					CanBePrefix: true,
 				},
-				Retries:  4,
+				Retries:  20,
 				Callback: func(args ndn.ExpressCallbackArgs) { ch2 <- args },
 			})
 			args = <-ch2
@@ -198,40 +198,42 @@ func (a *App) IsWorkspaceOwner(wkspStr string) (bool, error) {
 // onAccessRequest handles incoming access requests if the user is owner of the workspace.
 func (a *App) onAccessRequest(args ndn.InterestHandlerArgs) {
 	interest := args.Interest
-	log.Info(nil, "Received interest", "name", interest.Name())
 
 	// Get list of access requests, add the new one if not a duplicate
 	access_requests := js.Global().Get("_access_requests")
 	name := interest.Name()
 	requester := ""
+	wksp := ""
 	for c := 0; c < name.EncodingLength(); c++ {
 		if name[c].Equal(enc.NewKeywordComponent("INVITE")) {
 			requester = name[c+1:].String()
+			wksp = name[:c-1].String()
 			break
 		}
 	}
-
-	log.Info(nil, "Received access request", "requester", requester)
 
 	r := 0
 	duplicate := false
 
 	for r < access_requests.Length() {
-		if access_requests.Index(r).Equal(js.ValueOf(requester)) {
+		if access_requests.Index(r).Index(0).Equal(js.ValueOf(wksp)) &&
+			access_requests.Index(r).Index(1).Equal(js.ValueOf(requester)) {
+
 			duplicate = true
 		}
 		r++
 	}
 
-	log.Info(nil, "Duplicate =", "duplicate", duplicate)
+	log.Info(nil, "Received access request", "requester", requester, "duplicate", duplicate)
 
 	if !duplicate {
-		access_requests.Call("push", js.ValueOf(requester))
+		wksp_data := append(make([]interface{}, 0), wksp, requester, false) // Creates an array of the wksp name and requester to pass to JS
+		access_requests.Call("push", js.ValueOf(wksp_data))
+
+		js.Global().Set("_access_requests", access_requests)
+
+		log.Info(nil, "Access requests:", "requests", access_requests)
 	}
-
-	js.Global().Set("_access_requests", access_requests)
-
-	log.Info(nil, "Access requests:", "requests", access_requests)
 
 }
 
@@ -271,7 +273,6 @@ func (a *App) GetWorkspace(groupStr string, ignoreValidity bool) (api js.Value, 
 	// Create client object for this workspace
 	client := object.NewClient(a.engine, a.store, trust)
 
-
 	// Reset encryption keys
 	a.psk = nil
 	a.dsk = nil
@@ -282,7 +283,6 @@ func (a *App) GetWorkspace(groupStr string, ignoreValidity bool) (api js.Value, 
 	if err != nil {
 		return
 	}
-	log.Info(nil, "Checking if isowner:", "isowner", isOwner)
 	if isOwner {
 		// prefix, _ := enc.NameFromStr("/ndn/multicast" + groupStr) // Uncomment if you want to use multicast
 		prefix, _ := enc.NameFromStr(groupStr)
@@ -295,7 +295,7 @@ func (a *App) GetWorkspace(groupStr string, ignoreValidity bool) (api js.Value, 
 			Expose:  true,
 			OnError: nil, // TODO
 		})
-		log.Info(nil, "Attached access request handler for", "name", accessRequestPrefix)
+		log.Info(nil, "Watching for access requests")
 	}
 
 	var workspaceJs map[string]any

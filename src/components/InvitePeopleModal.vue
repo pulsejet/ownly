@@ -206,7 +206,8 @@ watch(
     pendingInvitees.value.length = 0; // clear pending invitees
     pendingRequests.value.length = 0;
     _access_requests.forEach((requester) => {
-      addRequest(requester);
+      if (wksp.value?.metadata.name == requester[0] && !requester[2]) // requester[2] is false if request has not been dealt with yet
+        addRequest(requester[1]);
     })
 
     inviteLink.value = await wksp.value.invite.getJoinLink(router);
@@ -303,7 +304,7 @@ function addInvitee(invitee: string) {
   pendingInvitees.value.push(new_profile);
 }
 
-// Add an invitee to the pending list
+// Add an access request to the pending list
 function addRequest(invitee: string) {
   // Check maximum invitees per invitation
   if (pendingRequests.value.length >= 100) {
@@ -338,12 +339,24 @@ function addRequest(invitee: string) {
   // Check if already invited/pending
   if (allInvitees.value.some((profile) => profile.name === new_profile.name)) {
     console.log("Received access request from already added member");
+
+    // Remove from local list to prevent accidental duplicates, and mark in global list as already dealt with
+    const idx = _access_requests.findIndex(a => a[0] == wksp.value?.metadata.name && a[1] == new_profile.name)
+    if (idx != -1)
+      _access_requests[idx][2] = true
+    pendingRequests.value = pendingRequests.value.filter(a => a.name != new_profile.name)
     return;
   }
 
   // Check for repetition
   if (pendingRequests.value.some((profile) => profile.name === new_profile.name)) {
     console.log("Received duplicate access request");
+
+    // Remove from local list to prevent accidental duplicates, and mark in global list as already dealt with
+    const idx = _access_requests.findIndex(a => a[0] == wksp.value?.metadata.name && a[1] == new_profile.name)
+    if (idx != -1)
+      _access_requests[idx][2] = true
+    pendingRequests.value = pendingRequests.value.filter(a => a.name != new_profile.name)
     return;
   }
 
@@ -355,16 +368,12 @@ async function acceptRequest(invitee: IProfile) {
   console.log(invitee);
   if (!wksp.value) return;
 
-  // Remove from global and local list to prevent accidental duplicates
-  var idx = _access_requests.indexOf(invitee.name, 0);
-  if (idx > -1) {
-    _access_requests.splice(idx, 1);
-  }
-
-  idx = pendingRequests.value.indexOf(invitee, 0);
-  if (idx > -1) {
-    pendingRequests.value.splice(idx, 1);
-  }
+  // Remove from local list to prevent accidental duplicates, and mark in global list as already dealt with
+  console.log(_access_requests)
+  const idx = _access_requests.findIndex(a => a[0] == wksp.value?.metadata.name && a[1] == invitee.name)
+  if (idx != -1)
+    _access_requests[idx][2] = true
+  pendingRequests.value = pendingRequests.value.filter(a => a.name != invitee.name)
 
   // Publish invitation
   try {
@@ -378,20 +387,18 @@ async function acceptRequest(invitee: IProfile) {
   invitees.value.push(invitee);
 
   // Finish
-  Toast.success(`Invited 1 user to workspace!`);
+  Toast.success(`Invited ${invitee.name} to workspace!`);
 }
 
 function denyRequest(invitee: IProfile) {
-  // Remove from global list to prevent accidental duplicates
-  var idx = _access_requests.indexOf(invitee.name, 0);
-  if (idx > -1) {
-    _access_requests.splice(idx, 1);
-  }
+  if (!wksp.value) return;
 
-  idx = pendingRequests.value.indexOf(invitee, 0);
-  if (idx > -1) {
-    pendingRequests.value.splice(idx, 1);
-  }
+  // Remove from local list to prevent accidental duplicates, and mark in global list as already dealt with
+  console.log(_access_requests)
+  const idx = _access_requests.findIndex(a => a[0] == wksp.value?.metadata.name && a[1] == invitee.name)
+  if (idx != -1)
+    _access_requests[idx][2] = true
+  pendingRequests.value = pendingRequests.value.filter(a => a.name != invitee.name)
 }
 
 // Sign the invitations and send them to the server
