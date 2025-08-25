@@ -76,7 +76,7 @@
 
         <p class="menu-label">Discussion</p>
         <ul class="menu-list">
-          <li v-for="chan in channels" :key="chan.uuid">
+          <li v-for="chan in chatChannels" :key="chan.uuid">
             <router-link :to="linkDiscuss(chan)">
               <FontAwesomeIcon class="mr-1" :icon="faHashtag" size="sm" />
               {{ chan.name }}
@@ -90,13 +90,39 @@
           </li>
         </ul>
 
+        <p class="menu-label">AI Agents</p>
+        <ul class="menu-list">
+          <li v-for="chan in agentChannels" :key="chan.uuid">
+            <router-link :to="linkDiscuss(chan)">
+              <div class="link-inner">
+                <FontAwesomeIcon class="mr-1" :icon="faRobot" size="sm" />
+                {{ chan.name }}
+              </div>
+
+              <button
+                class="link-button delete-button"
+                @click.prevent="deleteAgentChannel(chan)"
+                :title="`Delete ${chan.name} channel`"
+              >
+                <FontAwesomeIcon :icon="faTrash" size="sm" />
+              </button>
+            </router-link>
+          </li>
+          <li>
+            <a @click="showAgentModal = true">
+              <FontAwesomeIcon class="mr-1" :icon="faPlus" size="sm" />
+              Browse agents
+            </a>
+          </li>
+        </ul>
+
         <p class="menu-label">Workspace</p>
         <ul class="menu-list">
           <li>
             <a @click="showInviteModal = true">
               <FontAwesomeIcon class="mr-1" :icon="faPlus" size="sm" />
               Invite people
-              
+
               <FontAwesomeIcon v-show="showNotifBubble" class="mr-1" :icon="faCircleExclamation" size="sm"></FontAwesomeIcon>
             </a>
           </li>
@@ -130,12 +156,16 @@
     <AddProjectModal :show="showProjectModal" @close="showProjectModal = false" />
     <InvitePeopleModal :show="showInviteModal" @close="showInviteModal = false" />
     <QRIdentityModal :show="showIdentity" @close="showIdentity = false" />
+
+    <ModalComponent :show="showAgentModal" @close="showAgentModal = false">
+      <AgentBrowser />
+    </ModalComponent>
   </aside>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, useTemplateRef } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import {
@@ -147,6 +177,8 @@ import {
   faTableCells,
   faQrcode,
   faCircleInfo,
+  faRobot,
+  faTrash,
   faCircleExclamation,
 } from '@fortawesome/free-solid-svg-icons';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
@@ -155,15 +187,20 @@ import ProjectTree from './ProjectTree.vue';
 import ProjectTreeMenu from './ProjectTreeMenu.vue';
 import AddChannelModal from './AddChannelModal.vue';
 import AddProjectModal from './AddProjectModal.vue';
+import AgentBrowser from './AgentBrowser.vue';
+import ModalComponent from './ModalComponent.vue';
 
 import { GlobalBus } from '@/services/event-bus';
 import { Toast } from '@/utils/toast';
+import { Workspace } from '@/services/workspace';
 
 import type { IChatChannel, IProject, IProjectFile } from '@/services/types';
+import type { AgentChannel } from '@/services/workspace-agent';
 import InvitePeopleModal from './InvitePeopleModal.vue';
 import QRIdentityModal from './QRIdentityModal.vue';
 
 const route = useRoute();
+const router = useRouter();
 const routeIsDashboard = computed(() =>
   ['dashboard', 'join', 'about'].includes(String(route.name)),
 );
@@ -175,11 +212,16 @@ const showChannelModal = ref(false);
 const showProjectModal = ref(false);
 const showInviteModal = ref(false);
 const showIdentity = ref(false);
+const showAgentModal = ref(false);
 
 // vue-tsc chokes on this type inference
 const projectTree = useTemplateRef<Array<InstanceType<typeof ProjectTree>>>('projectTree');
 
 const channels = ref([] as IChatChannel[]);
+const agentChannels = ref([] as AgentChannel[]);
+
+// Use channels directly as chatChannels since they're now separate
+const chatChannels = computed(() => channels.value);
 
 const projects = ref([] as IProject[]);
 const activeProjectName = ref(null as string | null);
@@ -194,6 +236,7 @@ const busListeners = {
     projectFiles.value = files;
   },
   'chat-channels': (chans: IChatChannel[]) => (channels.value = chans),
+  'agent-channels': (chans: AgentChannel[]) => (agentChannels.value = chans),
   'conn-change': () => {
     connState.value = globalThis._ndnd_conn_state;
     if (!connState.value.connected) {
@@ -210,6 +253,7 @@ onMounted(async () => {
   GlobalBus.addListener('project-list', busListeners['project-list']);
   GlobalBus.addListener('project-files', busListeners['project-files']);
   GlobalBus.addListener('chat-channels', busListeners['chat-channels']);
+  GlobalBus.addListener('agent-channels', busListeners['agent-channels']);
   GlobalBus.addListener('conn-change', busListeners['conn-change']);
   interval = setInterval(() => {
     setNotification();
@@ -221,6 +265,7 @@ onUnmounted(() => {
   GlobalBus.removeListener('project-list', busListeners['project-list']);
   GlobalBus.removeListener('project-files', busListeners['project-files']);
   GlobalBus.removeListener('chat-channels', busListeners['chat-channels']);
+  GlobalBus.removeListener('agent-channels', busListeners['agent-channels']);
   GlobalBus.removeListener('conn-change', busListeners['conn-change']);
   clearInterval(interval);
 });
@@ -249,6 +294,23 @@ function linkDiscuss(channel: IChatChannel) {
       channel: channel.name,
     },
   };
+}
+
+async function deleteAgentChannel(channel: AgentChannel) {
+  if (!confirm(`Are you sure you want to delete the "${channel.name}" agent channel? This will permanently remove all messages.`)) {
+    return;
+  }
+
+  try {
+    const wksp = await Workspace.setupOrRedir(router);
+    if (!wksp) return;
+
+    await wksp.agent.deleteAgentChannel(channel.name);
+    Toast.success(`Deleted agent channel: ${channel.name}`);
+  } catch (error) {
+    console.error('Failed to delete agent channel:', error);
+    Toast.error(`Failed to delete channel: ${error}`);
+  }
 }
 
 function setNotification() {
@@ -316,6 +378,9 @@ function setNotification() {
   :deep(li > a) {
     background-color: transparent;
     color: white;
+    display: flex;
+    align-items: center;
+    //justify-content: space-between;
 
     &:hover {
       background-color: rgba(255, 255, 255, 0.1);
@@ -326,6 +391,32 @@ function setNotification() {
       background-color: var(--highlight-on-primary-color);
       color: var(--bulma-white-on-scheme);
     }
+    .link-inner {
+      flex: 1;
+      display: flex;
+      align-items: center;
+    }
+
+    .link-button {
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+      opacity: 0;
+
+      &:hover {
+      background-color: rgba(255, 69, 69, 0.2);
+      color: #ff4545;
+      }
+    }
+
+    &:hover .link-button {
+      opacity: 1;
+    }
+
   }
 }
 </style>
