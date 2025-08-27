@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 
 import type TypedEmitter from 'typed-emitter';
 import type { IChatChannel, IProject, IProjectFile } from './types';
+import type { AgentChannel } from './workspace-agent';
 
 /**
  * Global event bus for the application.
@@ -40,4 +41,10 @@ export const GlobalBus = new EventEmitter() as TypedEmitter<{
    * The state is stored in _ndnd_conn_state
    */
   'conn-change': () => void;
+
+  /**
+   * Event when agent channels are updated.
+   * @param channels List of agent channels
+   */
+  'agent-channels': (channels: AgentChannel[]) => void;
 }>;
