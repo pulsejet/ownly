@@ -1,0 +1,1 @@
+import{c as s,p as o}from"./purify.es-CUZqrfXr.js";import{h as t}from"./index-C5Q1Okh6.js";function a({icon:r,class:n,onClick:e}){return t("span",{class:s("milkdown-icon",n),onPointerdown:e,ref:i=>{i&&r&&(i.innerHTML=o.sanitize(r.trim()))}})}a.props={icon:{type:String,required:!1},class:{type:String,required:!1},onClick:{type:Function,required:!1}};export{a as I};
