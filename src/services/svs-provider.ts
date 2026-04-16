@@ -127,6 +127,28 @@ export class SvsProvider {
   }
 
   /**
+   * Export the currently persisted Yjs updates for a document as a single merged update.
+   */
+  public async exportDocSnapshot(uuid: string): Promise<Uint8Array> {
+    const updates = await this.db.updateGetAll(uuid);
+    if (updates.length === 0) return new Uint8Array();
+    if (updates.length === 1) return updates[0].update;
+    return Y.mergeUpdatesV2(updates.map((update) => update.update));
+  }
+
+  /**
+   * Republish the merged encrypted Yjs history of every persisted document in this SVS group.
+   */
+  public async republishEncryptedState(): Promise<void> {
+    const uuids = await this.db.updateListUUID();
+    for (const uuid of uuids) {
+      const merged = await this.exportDocSnapshot(uuid);
+      if (!(merged instanceof Uint8Array) || merged.byteLength === 0) continue;
+      await this.svs.pub_yjs_delta(uuid, merged);
+    }
+  }
+
+  /**
    * Get a Yjs document from the project.
    *
    *  @param uuid UUID of the document

@@ -115,6 +115,25 @@ export class Workspace {
   }
 
   /**
+   * Republish the current encrypted Yjs state as a manual recovery action for clients 
+   * that appear to be stuck on stale encrypted history or snapshot state.
+   */
+  public async republishEncryptedState(): Promise<void> {
+    await this.provider.republishEncryptedState();
+    await this.proj.republishEncryptedState();
+  }
+
+  /**
+   * Manually force a fresh encrypted-state republish for the workspace.
+   */
+  public async forceSnapshotUpdate(): Promise<void> {
+    if (!this.metadata.owner) {
+      throw new Error('Only the workspace owner can force a snapshot update');
+    }
+    await this.republishEncryptedState();
+  }
+
+  /**
    * Setup workspace from URL parameter.
    * @param space Workspace name from URL
    * @returns Workspace object or null if not found
