@@ -132,6 +132,18 @@
               <FontAwesomeIcon v-show="showNotifBubble" class="mr-1" :icon="faCircleExclamation" size="sm"></FontAwesomeIcon>
             </a>
           </li>
+          <li>
+            <a @click="showAdvancedSettings = !showAdvancedSettings">
+              <FontAwesomeIcon class="mr-1" :icon="faGear" size="sm" />
+              {{ showAdvancedSettings ? 'Hide advanced settings' : 'Advanced settings' }}
+            </a>
+          </li>
+          <li v-if="showAdvancedSettings">
+            <a :class="{ 'is-disabled': isRequestingSOS }" @click="sosRequest">
+              <FontAwesomeIcon class="mr-1" :icon="faArrowsRotate" size="sm" />
+              {{ isRequestingSOS ? 'Broadcasting SOS...' : 'SOS' }}
+            </a>
+          </li>
         </ul>
       </template>
 
@@ -187,6 +199,8 @@ import {
   faCircleInfo,
   faRobot,
   faCircleExclamation,
+  faArrowsRotate,
+  faGear,
   faMoon,
   faSun,
 } from '@fortawesome/free-solid-svg-icons';
@@ -222,6 +236,8 @@ const showProjectModal = ref(false);
 const showInviteModal = ref(false);
 const showIdentity = ref(false);
 const showAgentModal = ref(false);
+const showAdvancedSettings = ref(false);
+const isRequestingSOS = ref(false);
 
 // vue-tsc chokes on this type inference
 const projectTree = useTemplateRef<Array<InstanceType<typeof ProjectTree>>>('projectTree');
@@ -442,6 +458,27 @@ function setNotification() {
   else
     showNotifBubble.value = false;
 }
+
+async function sosRequest() {
+  if (isRequestingSOS.value) return;
+
+  const wksp = globalThis.ActiveWorkspace;
+  if (!wksp) {
+    Toast.error('No active workspace');
+    return;
+  }
+
+  isRequestingSOS.value = true;
+  const progress = Toast.loading('Broadcasting SOS refresh request...');
+  try {
+    const { responder } = await wksp.sosRequest();
+    await progress.success(`SOS request sent to ${responder}`);
+  } catch (err) {
+    await progress.error(`Failed to send SOS request: ${err}`);
+  } finally {
+    isRequestingSOS.value = false;
+  }
+}
 </script>
 
 <style scoped lang="scss">
@@ -492,6 +529,11 @@ function setNotification() {
     display: block;
     height: 35px;
     margin: 5px 0;
+  }
+
+  .menu-list a.is-disabled {
+    opacity: 0.65;
+    pointer-events: none;
   }
 
   .logo-row {
