@@ -471,7 +471,7 @@ async function sosRequest() {
   isRequestingSOS.value = true;
   const progress = Toast.loading('Broadcasting SOS refresh request...');
   try {
-    const { _, responder } = await wksp.sosRequest();
+    const { responder } = await wksp.sosRequest();
     await progress.success(`SOS request sent to ${responder}`);
   } catch (err) {
     await progress.error(`Failed to send SOS request: ${err}`);
