@@ -1,6 +1,8 @@
 //go:generate gondn_tlv_gen
 package tlv
 
+import enc "github.com/named-data/ndnd/std/encoding"
+
 type Message struct {
 	//+field:struct:AeadBlock
 	AeadBlock *AeadBlock `tlv:"0xC6"`
@@ -100,4 +102,16 @@ type MlsBlobRef struct {
 	BlobName string `tlv:"0x5A4"`
 	//+field:string
 	SessionId string `tlv:"0x5A6"`
+}
+
+// Revocation record. See revocation.go for the codec and name.
+type Revocation struct {
+	//+field:natural
+	Reason uint8 `tlv:"0x0106"`
+	//+field:natural
+	InvalidityTime uint64 `tlv:"0x0108"`
+	//+field:binary
+	CertHash []byte `tlv:"0x010A"`
+	//+field:name
+	CertName enc.Name `tlv:"0x010C"`
 }
