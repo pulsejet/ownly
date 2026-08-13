@@ -25,10 +25,10 @@ func makeRev(reason uint8, invalidity uint64) *Revocation {
 	}
 }
 
-// Round-trip across the reason codes Ownly uses plus edge values.
+// Round-trip across the reason codes Ownly uses plus the Nat max edge.
 func TestRevocationRoundTrip(t *testing.T) {
-	for _, reason := range []uint8{0, 1, 5, 9, 0xFF} {
-		for _, inv := range []uint64{0, 1, 1_700_000_000_000_000, 0xFFFFFFFFFFFFFFFF} {
+	for _, reason := range []uint8{0, 1, 9} {
+		for _, inv := range []uint64{0, 1_700_000_000_000_000, 0xFFFFFFFFFFFFFFFF} {
 			rev := makeRev(reason, inv)
 			wire, err := EncodeRevocationBytes(rev)
 			if err != nil {

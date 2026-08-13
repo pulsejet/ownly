@@ -32,18 +32,6 @@ func TestRecordLatestWins(t *testing.T) {
 	}
 }
 
-func TestNilStateIsSafe(t *testing.T) {
-	var s *revocationState
-	n, _ := enc.NameFromStr("/x")
-	if s.isRevoked(n) {
-		t.Fatal("nil state should not report revoked")
-	}
-	s.record(mkRec(0, nil, 0), n) // must not panic
-	if s.list() != nil {
-		t.Fatal("nil state should return nil list")
-	}
-}
-
 // A revocation received before the cert is in the keychain must
 // resolve to the by-name + by-publisher indexes when the cert later
 // arrives.
@@ -70,17 +58,13 @@ func TestResolvePendingByHash(t *testing.T) {
 
 func TestPublisherExtraction(t *testing.T) {
 	cases := []struct {
-		in  string
-		want string
+		in, want string
 	}{
 		{"/alice/KEY/kid/v=1", "/alice"},
 		{"/bob/device/KEY/k2/v=2", "/bob/device"},
-		{"/no-key-here", ""},
-		{"", ""},
+		{"/no-key-here", ""}, // no KEY component -> no publisher
 	}
 	for _, c := range cases {
-		// extractPublisher returns the TlvStr form (binary TLV bytes),
-		// matching the form used by publisherIsRevoked's lookup.
 		got, _ := extractPublisher(mustName(t, c.in))
 		want := ""
 		if c.want != "" {

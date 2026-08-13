@@ -239,6 +239,9 @@ func (a *App) participantSub(client ndn.Client) error {
 
 	ownerName, _ := enc.NameFromStr("32=owner")
 	a.bootSyncSession.alo.SubscribePublisher(ownerName, func(pub ndn_sync.SvsPub) {
+		if a.handleRevocationPub(pub) {
+			return
+		}
 		// Parsing
 		data, _, err := spec.Spec{}.ReadData(enc.NewWireView(pub.Content))
 		if err != nil {
@@ -376,6 +379,9 @@ func (a *App) ownerSub(client ndn.Client, wkspName enc.Name, rootSigner ndn.Sign
 	// 1. participant join payload carrying user precert full name (+ optional app payload),
 	// 2. user final cert, 3. repo command to fetch invitation
 	a.bootSyncSession.alo.SubscribePublisher(enc.Name{}, func(pub ndn_sync.SvsPub) {
+		if a.handleRevocationPub(pub) {
+			return
+		}
 		content := pub.Content
 		// Case 1: content is a final cert (encapsulated Data).
 		contentData, _, err := spec.Spec{}.ReadData(enc.NewWireView(content))
@@ -549,12 +555,15 @@ func (a *App) ownerSub(client ndn.Client, wkspName enc.Name, rootSigner ndn.Sign
 				ephData, _, readErr := spec.Spec{}.ReadData(enc.NewWireView(enc.Wire{msg.BootJoin.InviteeIdCert}))
 				if readErr != nil {
 					log.Warn(a, "Skipping eph revoke: failed to parse piggybacked identity cert", "err", readErr)
-				} else if _, _, ephErr := publishRevocationToAlo(
+				} else if _, ephState, ephErr := publishRevocationToAlo(
 					a.bootSyncSession.alo, wkspName, ephData.Name(),
 					msg.BootJoin.InviteeIdCert, 5, 0,
 				); ephErr != nil {
 					log.Warn(a, "Failed to publish ephemeral-cert revocation", "err", ephErr, "name", ephData.Name())
 				} else {
+					if ephState != nil {
+						a.PersistBootState(ephState)
+					}
 					a.reshootSecurityConfig()
 					log.Info(a, "Published ephemeral-cert revocation", "name", ephData.Name())
 				}

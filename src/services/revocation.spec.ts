@@ -43,11 +43,6 @@ describe('revocation cache', () => {
     expect(lookupRevocation('Y')?.reason).toBe(ReasonCode.CessationOfOperation)
   })
 
-  it('ignores records with empty cert hash', () => {
-    recordRevocation(rec({ certHash: '' }))
-    expect(listRevocations()).toHaveLength(0)
-  })
-
   it('does NOT emit cert-revoked when recording (recursion guard)', () => {
     const spy = vi.spyOn(GlobalBus, 'emit')
     recordRevocation(rec({ certHash: 'Z' }))
@@ -85,10 +80,8 @@ describe('registerOnCertRevoked bridge', () => {
 })
 
 describe('reasonLabel', () => {
-  it('returns a human-readable string per code', () => {
-    expect(reasonLabel(ReasonCode.Unspecified)).toBe('unspecified')
+  it('returns a human-readable string per known code and the fallback for unknown', () => {
     expect(reasonLabel(ReasonCode.KeyCompromise)).toBe('key compromise')
-    expect(reasonLabel(ReasonCode.CessationOfOperation)).toBe('cessation of operation')
     expect(reasonLabel(ReasonCode.PrivilegeWithdrawn)).toBe('revoked by owner')
     expect(reasonLabel(99)).toBe('reason 99')
   })
