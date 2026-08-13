@@ -541,6 +541,24 @@ func (a *App) ownerSub(client ndn.Client, wkspName enc.Name, rootSigner ndn.Sign
 				a.PersistBootState(state)
 				log.Info(a, "Published final cert", "name", "name", userCertData.Name())
 			}
+
+			// After publishing the joiner's final cert, also publish a
+			// Revocation for the joiner's ephemeral cert (reason 5,
+			// cessationOfOperation, InvalidityTime 0). Best-effort.
+			if len(msg.BootJoin.InviteeIdCert) > 0 {
+				ephData, _, readErr := spec.Spec{}.ReadData(enc.NewWireView(enc.Wire{msg.BootJoin.InviteeIdCert}))
+				if readErr != nil {
+					log.Warn(a, "Skipping eph revoke: failed to parse piggybacked identity cert", "err", readErr)
+				} else if _, _, ephErr := publishRevocationToAlo(
+					a.bootSyncSession.alo, wkspName, ephData.Name(),
+					msg.BootJoin.InviteeIdCert, 5, 0,
+				); ephErr != nil {
+					log.Warn(a, "Failed to publish ephemeral-cert revocation", "err", ephErr, "name", ephData.Name())
+				} else {
+					a.reshootSecurityConfig()
+					log.Info(a, "Published ephemeral-cert revocation", "name", ephData.Name())
+				}
+			}
 		}
 		// Case 3: Repo blob fetch command
 	})

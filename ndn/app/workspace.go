@@ -1421,6 +1421,33 @@ func (a *App) SvsAloJs(
 			return js.ValueOf(name.String()), nil
 		}),
 
+		// pub_revocation(certName, reason, invalidityTime): Promise<string>;
+		"pub_revocation": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			certName, err := enc.NameFromStr(p[0].String())
+			if err != nil {
+				return nil, fmt.Errorf("invalid cert name: %w", err)
+			}
+			if a.trust.Suggest(wkspName.Append(enc.NewKeywordComponent("KD"))) == nil {
+				return nil, fmt.Errorf("not master: workspace anchor key not available")
+			}
+			certWire, err := a.resolveCertWire(certName)
+			if err != nil {
+				return nil, err
+			}
+			recName, state, err := publishRevocationToAlo(
+				alo, wkspName, certName, certWire,
+				uint8(p[1].Int()), uint64(p[2].Int()),
+			)
+			if err != nil {
+				return nil, err
+			}
+			if state != nil {
+				jsutil.Await(persistState.Invoke(jsutil.SliceToJsArray(state.Join())))
+			}
+			a.reshootSecurityConfig()
+			return js.ValueOf(recName), nil
+		}),
+
 		// pub_blob_fetch(name: string, encapsulate: Uint8Array | undefined): Promise<string>;
 		"pub_blob_fetch": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
 			// This message is special, in the sense that it is purely intended for repo.
