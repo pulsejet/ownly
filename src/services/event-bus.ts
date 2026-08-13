@@ -63,4 +63,18 @@ export const GlobalBus = new EventEmitter() as TypedEmitter<{
     preCertKeyName: string,
     payload: Uint8Array,
   ) => void;
+
+  /**
+   * Event when a cert in the local keychain has been revoked.
+   * Payload is the full revocation record from the Go side.
+   */
+  'cert-revoked': (record: {
+    reason: number;
+    invalidity_time: number;
+    cert_hash: string;
+    publisher: string;
+    boot_time: number;
+    seq_num: number;
+    cert_name: string;
+  }) => void;
 }>;

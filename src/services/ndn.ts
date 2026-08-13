@@ -60,6 +60,35 @@ interface NDNAPI {
   /** Export a managed identity certificate by name */
   export_identity_cert_by_name(certName: string): Promise<Uint8Array>;
 
+  /**
+   * Revoke a peer cert. Publishes a Revocation record to the boot SVS
+   * group of the active workspace. Returns the canonical record name.
+   * Master-only.
+   */
+  revoke_cert(certName: string, reason: number, invalidityTime: number): Promise<string>;
+  /**
+   * List all known revocation records. Returns the in-memory state
+   * received since startup; re-received on workspace reopen.
+   */
+  list_revocations(): Promise<Array<{
+    cert_name: string;
+    reason: number;
+    invalidity_time: number;
+    cert_hash: string;
+    publisher: string;
+    boot_time: number;
+    seq_num: number;
+  }>>;
+  /** Register a callback for cert-revoked events. */
+  on_cert_revoked(cb: (certName: string, record: {
+    reason: number;
+    invalidity_time: number;
+    cert_hash: string;
+    publisher: string;
+    boot_time: number;
+    seq_num: number;
+  }) => void): Promise<void>;
+
   /** Connect to the global NDN testbed */
   connect_testbed(): Promise<void>;
 
@@ -203,6 +232,11 @@ export interface SvsAloApi {
   /** Publish MLS commit message for a group change */
   pub_mls_commit_ref(invitee: string, blobName: string, sessionId: string): Promise<string>;
 
+  /**
+   * Publish a Revocation record. Master-only.
+   */
+  pub_revocation(certName: string, reason: number, invalidityTime: number): Promise<string>;
+
   /** Set SVS ALO subscription callbacks */
   subscribe(params: {
     on_yjs_delta: SvsAloSub<{ uuid: string; binary: Uint8Array }>;
@@ -211,6 +245,7 @@ export interface SvsAloApi {
     on_mls_commit_ref?: SvsAloSub<MlsRefPub>;
     on_refresh_ping?: SvsAloSub<RefreshPingPub>;
     on_refresh_pong?: SvsAloSub<RefreshPongPub>;
+    on_revocation?: SvsAloSub<RevocationPub>;
   }): Promise<void>;
 
   /** Awareness instance piggybacking on this SVS instance */
@@ -239,6 +274,14 @@ export type RefreshPongPub = SvsAloPubInfo & {
   responder: string;
   freshness: number;
   sent_at: string;
+};
+
+/** Published revocation record. */
+export type RevocationPub = SvsAloPubInfo & {
+  reason: number;
+  invalidity_time: number;
+  cert_hash: string;
+  cert_name: string;
 };
 
 /** API for Awareness */
@@ -376,6 +419,33 @@ class NDNService {
         );
       } catch (err) {
         console.error('Failed to register boot join payload callback', err);
+      }
+    }
+
+    if (typeof this.api.on_cert_revoked === 'function') {
+      try {
+        await this.api.on_cert_revoked(
+          (certName: string, record: {
+            reason: number;
+            invalidity_time: number;
+            cert_hash: string;
+            publisher: string;
+            boot_time: number;
+            seq_num: number;
+          }) => {
+            GlobalBus.emit('cert-revoked', {
+              reason: record.reason,
+              invalidity_time: record.invalidity_time,
+              cert_hash: record.cert_hash,
+              publisher: record.publisher,
+              boot_time: record.boot_time,
+              seq_num: record.seq_num,
+              cert_name: certName,
+            });
+          },
+        );
+      } catch (err) {
+        console.error('Failed to register cert-revoked callback', err);
       }
     }
   }

@@ -1002,10 +1002,48 @@ export class WorkspaceInviteManager {
     );
     await this.provider.svs.pub_mls_commit_ref(name, blob, sessionId);
 
+    // Publish Revocation records for every peer cert of the removed
+    // identity (reason 9, privilegeWithdrawn, InvalidityTime 0).
+    // Best-effort: partial failure emits wksp-error; the MLS remove
+    // is not rolled back (past the point of no return).
+    const revSummary = await this.publishIdentityRevocations(name, 9, 0);
+    if (revSummary.failed > 0) {
+      GlobalBus.emit('wksp-error', new Error(
+        `Removed ${name} from MLS, but ${revSummary.failed} of ${revSummary.published + revSummary.failed} revocation record(s) failed to publish.`,
+      ));
+    }
+
     // remove from authorization map
     this.inviteeProfiles.delete(name);
     await this.deletePeerIdentityEntries(name);
     await this.notifyOwnerSessionAdvanced(sessionId);
+  }
+
+  private async publishIdentityRevocations(
+    identity: string,
+    reason: number,
+    invalidityTime: number,
+  ): Promise<{ published: number; failed: number }> {
+    const result = { published: 0, failed: 0 };
+    try {
+      const overview = await ndn.api.list_identity_keys();
+      const normIdentity = `${identity.replace(/\/+$/, '')}/`;
+      const peerCerts = (overview.peers ?? []).filter(
+        (p) => p.identity === identity || p.identity === normIdentity,
+      );
+      for (const peer of peerCerts) {
+        try {
+          await this.provider.svs.pub_revocation(peer.certName, reason, invalidityTime);
+          result.published += 1;
+        } catch (err) {
+          console.warn(`Failed to publish revocation for ${peer.certName}`, err);
+          result.failed += 1;
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to enumerate peer certs for ${identity}`, err);
+    }
+    return result;
   }
 
   public async removeOwnerDevice(deviceId: string): Promise<void> {
