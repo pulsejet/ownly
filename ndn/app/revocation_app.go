@@ -7,6 +7,7 @@ package app
 
 import (
 	"fmt"
+	"time"
 
 	enc "github.com/named-data/ndnd/std/encoding"
 	"github.com/named-data/ndnd/std/log"
@@ -127,4 +128,42 @@ func (a *App) reshootSecurityConfig() {
 		return
 	}
 	log.Info(a, "Reshoot SecurityConfig (stub)")
+}
+
+// handleRevocationPub processes a SVS publication that may be a
+// Revocation record (0xD4 first byte). Returns true if the pub was
+// handled (caller should continue to the next pub). A non-revocation
+// pub returns false. All revocation records (including ones for
+// unknown certs) are accepted; the owner-publisher gate is enforced
+// at the SVS layer.
+func (a *App) handleRevocationPub(pub ndn_sync.SvsPub) bool {
+	contentBytes := pub.Content.Join()
+	if len(contentBytes) == 0 || contentBytes[0] != byte(tlv.RevocationTLVType) {
+		return false
+	}
+	rev, err := tlv.DecodeRevocationBytes(contentBytes)
+	if err != nil {
+		log.Warn(nil, "Failed to decode revocation", "err", err)
+		return true
+	}
+	rec := &RevocationRecord{
+		Reason:         rev.Reason,
+		InvalidityTime: rev.InvalidityTime,
+		CertHash:       rev.CertHash,
+		Publisher:      pub.Publisher,
+		BootTime:       pub.BootTime,
+		SeqNum:         pub.SeqNum,
+		ReceivedAt:     time.Now(),
+	}
+	if a.bootSyncSession != nil && a.bootSyncSession.revokedCerts != nil {
+		a.bootSyncSession.revokedCerts.record(rec, rev.CertName)
+	}
+	if demoteErr := a.demoteCert(rev.CertName); demoteErr != nil {
+		// Cert not in local store yet. applyPendingRevocations
+		// will demote when the cert arrives via the cert-insert path.
+		log.Info(nil, "Cached revocation for unknown cert", "name", rev.CertName, "err", demoteErr)
+	} else {
+		a.emitCertRevoked(rev.CertName, rec)
+	}
+	return true
 }

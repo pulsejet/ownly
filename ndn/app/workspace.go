@@ -1598,6 +1598,17 @@ func (a *App) SvsAloJs(
 				refreshPongs := js.Global().Get("Array").New()
 
 				for _, pub := range pubs {
+					// Drop publications from revoked publishers BEFORE
+					// the message-type switch. This is the Sync DoS fix.
+					if a.bootSyncSession != nil && a.bootSyncSession.revokedCerts != nil &&
+						a.bootSyncSession.revokedCerts.publisherIsRevoked(pub.Publisher) {
+						continue
+					}
+
+					if a.handleRevocationPub(pub) {
+						continue
+					}
+
 					pmsg, err := tlv.ParseMessage(enc.NewWireView(pub.Content), true)
 					if err != nil {
 						log.Error(nil, "Failed to parse publication", "err", err)

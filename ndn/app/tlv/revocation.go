@@ -214,6 +214,11 @@ func HashCertBytes(certWireBytes []byte) []byte {
 	return sum[:]
 }
 
+// HashBytesToBase32 base32-encodes the given bytes (no padding).
+func HashBytesToBase32(b []byte) string {
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)
+}
+
 // BuildRevocationName constructs /<wksp>/boot/REVOKE/<hash>/v=<unix-us>.
 // Use BuildRevocationNameWithVersion for deterministic tests.
 func BuildRevocationName(wkspName enc.Name, certWireBytes []byte) (enc.Name, error) {
