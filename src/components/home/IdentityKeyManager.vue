@@ -246,7 +246,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 
 import LoadingSpinner from '@/components/LoadingSpinner.vue';
 import ModalComponent from '@/components/ModalComponent.vue';
@@ -259,7 +259,7 @@ import {
   formatIdentityFilename,
 } from '@/utils/identity';
 import { describeIdentityKeyImportError, describePeerCertImportError } from '@/utils/identity-errors';
-import { recordRevocation, reasonLabel, ReasonCode, type ReasonCodeValue, type RevocationRecord } from '@/services/revocation';
+import { recordRevocation, reasonLabel, ReasonCode, registerOnCertRevoked, type ReasonCodeValue, type RevocationRecord } from '@/services/revocation';
 import { GlobalBus } from '@/services/event-bus';
 import { decodeQrDataPayload, decryptSecretPayload } from '@/utils/qr-crypto';
 import QrModal from '@/components/QrModal.vue';

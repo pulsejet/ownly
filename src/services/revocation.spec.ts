@@ -4,7 +4,6 @@ import {
   ReasonCode,
   clearRevocations,
   isRevoked,
-  listRevocations,
   lookupRevocation,
   reasonLabel,
   recordRevocation,

@@ -921,7 +921,7 @@ func (a *App) GetWorkspace(groupStr string, ignoreValidity bool) (api js.Value, 
 			}
 
 			// Create JS API for SVS ALO
-			return a.SvsAloJs(client, svsAlo, p[2])
+			return a.SvsAloJs(client, svsAlo, svsAloGroup.Prefix(-1), p[2])
 		}),
 
 		// sign_and_pub_invitation(invitee: string): Promise<Uint8Array>;
@@ -1265,6 +1265,7 @@ func (a *App) setupOwner(wkspName enc.Name, identitySigner ndn.Signer) (ndn.Sign
 func (a *App) SvsAloJs(
 	client ndn.Client,
 	alo *ndn_sync.SvsALO,
+	wkspName enc.Name,
 	persistState js.Value,
 ) (api js.Value, err error) {
 	// List of SVS routes to announce

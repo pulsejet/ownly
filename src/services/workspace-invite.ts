@@ -2,7 +2,7 @@ import * as utils from '@/utils';
 import * as Y from 'yjs';
 
 import type { Router } from 'vue-router';
-import type { WorkspaceAPI, MlsRefPub } from '@/services/ndn';
+import ndn, { type WorkspaceAPI, type MlsRefPub } from '@/services/ndn';
 import type { SvsProvider } from '@/services/svs-provider';
 import type { IOwnerDeviceRecord, IProfile, IWkspStats } from '@/services/types';
 import  { OpenMlsLiteClient, OpenMlsLiteGroup } from '@/services/openmls-lite';

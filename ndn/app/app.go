@@ -17,6 +17,7 @@ import (
 	"github.com/named-data/ndnd/std/security/keychain"
 	"github.com/named-data/ndnd/std/security/trust_schema"
 	jsutil "github.com/named-data/ndnd/std/utils/js"
+	"github.com/pulsejet/ownly/ndn/app/tlv"
 )
 
 type SessionCipher struct {
@@ -462,7 +463,7 @@ func (a *App) JsApi() js.Value {
 // resolveCertWire looks up a cert's wire bytes in the local store.
 // Falls back to a prefix match so legacy key+cert combined names
 // also resolve.
-func (a *App) resolveCertWire(certName enc.Name) (enc.Wire, error) {
+func (a *App) resolveCertWire(certName enc.Name) ([]byte, error) {
 	wire, err := a.store.Get(certName, false)
 	if err != nil || wire == nil {
 		if len(certName) > 0 {
