@@ -413,6 +413,7 @@ export class WorkspaceProj {
         const history = doc.getArray<IBlobVersion>('blobs');
         history.unshift([version]);
       } finally {
+        await this.provider.flushDoc(meta.uuid);
         // TODO: see comment on isText block below
         doc.destroy();
       }
@@ -437,6 +438,7 @@ export class WorkspaceProj {
           Y.applyUpdateV2(doc, new Uint8Array(buffer));
         }
       } finally {
+        await this.provider.flushDoc(meta.uuid);
         // TODO: if the doc is already open, we should not destroy it
         // Or use some better technique like reference counting
         doc.destroy();
@@ -463,6 +465,7 @@ export class WorkspaceProj {
           }
         });
       } finally {
+        await this.provider.flushDoc(meta.uuid);
         // TODO: if the doc is already open, we should not destroy it
         // Or use some better technique like reference counting
         doc.destroy();

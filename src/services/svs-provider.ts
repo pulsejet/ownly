@@ -351,6 +351,12 @@ export class SvsProvider {
     return await this.wksp.consume(name);
   }
 
+  // Flush a doc's pending Yjs bundle to IndexedDB and SVS
+  public async flushDoc(uuid: string): Promise<void> {
+    const bundler = this.bundlers.get(uuid);
+    if (bundler) await bundler.issue();
+  }
+
   /**
    * Get the awareness instance for a document.
    * If an awareness exists, the same instance will be returned.
