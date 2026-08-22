@@ -160,9 +160,6 @@
               </td>
               <td class="name-col">
                 <code :title="peer.identityTitle">{{ peer.identityLabel }}</code>
-                <span v-if="revokedBadge(peer)" class="tag is-danger is-light ml-2" :title="revokedTooltip(peer)">
-                  {{ revokedBadge(peer) }}
-                </span>
               </td>
               <td class="name-col"><code :title="peer.keyIdTitle">{{ peer.keyIdLabel }}</code></td>
               <td><span :title="peer.createdTitle">{{ peer.createdLabel }}</span></td>
@@ -179,15 +176,6 @@
                     @click="deleteEntry(peer)"
                   >
                     Delete
-                  </button>
-                </div>
-                <div v-if="canRevoke" class="action-col">
-                  <button
-                    class="button is-small is-fullwidth is-warning"
-                    :disabled="busy || isRevokedPeer(peer)"
-                    @click="revokePeer(peer)"
-                  >
-                    {{ isRevokedPeer(peer) ? 'Revoked' : 'Revoke' }}
                   </button>
                 </div>
               </td>
@@ -246,7 +234,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 import LoadingSpinner from '@/components/LoadingSpinner.vue';
 import ModalComponent from '@/components/ModalComponent.vue';
@@ -259,8 +247,6 @@ import {
   formatIdentityFilename,
 } from '@/utils/identity';
 import { describeIdentityKeyImportError, describePeerCertImportError } from '@/utils/identity-errors';
-import { recordRevocation, reasonLabel, ReasonCode, registerOnCertRevoked, type ReasonCodeValue, type RevocationRecord } from '@/services/revocation';
-import { GlobalBus } from '@/services/event-bus';
 import { decodeQrDataPayload, decryptSecretPayload } from '@/utils/qr-crypto';
 import QrModal from '@/components/QrModal.vue';
 
@@ -392,93 +378,6 @@ function openScanner(mode: 'peer' | 'secret') {
   showScanner.value = true;
 }
 
-// Master-only revoke button. ActiveWorkspace is a non-reactive var;
-// bump the ref on cert-revoked + wksp-error so the computed
-// re-evaluates after master-status changes.
-const isMasterRev = ref(0)
-const canRevoke = computed(
-  () => isMasterRev.value >= 0 && !!globalThis.ActiveWorkspace?.invite?.isMasterDevice(),
-)
-function bumpMaster() { isMasterRev.value++ }
-
-// Cert name -> record. Updated on every cert-revoked event and on
-// the list_revocations rehydrate in refresh().
-const revokedByCertName = ref(new Map<string, RevocationRecord>())
-
-function handleRevoked(rec: RevocationRecord) {
-  recordRevocation(rec)
-  if (rec.certName) {
-    const next = new Map(revokedByCertName.value)
-    next.set(rec.certName, rec)
-    revokedByCertName.value = next
-  }
-  bumpMaster()
-}
-
-const unregisterCertRevoked = registerOnCertRevoked((rec) => handleRevoked(rec))
-GlobalBus.on('wksp-error', bumpMaster)
-onUnmounted(() => {
-  unregisterCertRevoked()
-  GlobalBus.off('wksp-error', bumpMaster)
-})
-
-function isRevokedPeer(peer: IdentityKeyInfo): boolean {
-  return !!peer.certName && revokedByCertName.value.has(peer.certName)
-}
-
-function revokedBadge(peer: IdentityKeyInfo): string | null {
-  if (!isRevokedPeer(peer)) return null
-  const rec = revokedByCertName.value.get(peer.certName)
-  if (!rec) return null
-  const when = rec.invalidityTime > 0
-    ? new Date(Math.floor(rec.invalidityTime / 1000)).toISOString().slice(0, 10)
-    : 'now'
-  return `[REVOKED ${when}]`
-}
-
-function revokedTooltip(peer: IdentityKeyInfo): string {
-  const rec = revokedByCertName.value.get(peer.certName)
-  if (!rec) return ''
-  return `Reason: ${reasonLabel(rec.reason)}`
-}
-
-async function revokePeer(peer: IdentityKeyInfo) {
-  if (!peer.certName) return
-  const peerLabel = peer.identity
-    || deriveIdentityFromKeyName(peer.keyName)
-    || peer.certName
-    || 'this peer'
-  if (!confirm(`Revoke ${peerLabel}'s certificate? A revocation record will be published to the active workspace's boot group, so peers drop this cert's Sync publications. To fully remove a member from MLS, use the members panel.`)) {
-    return
-  }
-  busy.value = true
-  action.value = 'revoke-peer'
-  try {
-    await ndn.api.revoke_cert(peer.certName, ReasonCode.PrivilegeWithdrawn, 0)
-    // Optimistic local update; the on_cert_revoked callback will
-    // overwrite this entry with the real record (including the
-    // cert hash we don't have here).
-    const next = new Map(revokedByCertName.value)
-    next.set(peer.certName, {
-      reason: ReasonCode.PrivilegeWithdrawn,
-      invalidityTime: 0,
-      certHash: '',
-      certName: peer.certName,
-      publisher: '',
-      bootTime: 0,
-      seqNum: 0,
-    })
-    revokedByCertName.value = next
-    bumpMaster()
-    Toast.success(`Revoked ${peerLabel}`)
-  } catch (err) {
-    Toast.error(`Failed to revoke: ${err}`)
-  } finally {
-    busy.value = false
-    action.value = null
-  }
-}
-
 async function refresh(options: { showSpinner?: boolean } = {}) {
   const { showSpinner = true } = options;
   if (showSpinner) loading.value = true;
@@ -490,26 +389,6 @@ async function refresh(options: { showSpinner?: boolean } = {}) {
     localKeys.value = overview.local ?? [];
     peerKeys.value = overview.peers ?? [];
     selectedPeers.value = new Set();
-    // Rehydrate revocation cache so the [REVOKED] badge is correct
-    // for certs revoked in a previous session. The bus only delivers
-    // new revocations; persisted ones live in App memory.
-    const existing = await ndn.api.list_revocations()
-    const next = new Map(revokedByCertName.value)
-    for (const r of existing) {
-      if (!r.cert_name) continue
-      const rec: RevocationRecord = {
-        reason: r.reason as ReasonCodeValue,
-        invalidityTime: r.invalidity_time,
-        certHash: r.cert_hash,
-        certName: r.cert_name,
-        publisher: r.publisher,
-        bootTime: r.boot_time,
-        seqNum: r.seq_num,
-      }
-      recordRevocation(rec)
-      next.set(r.cert_name, rec)
-    }
-    revokedByCertName.value = next
   } catch (err) {
     console.error(err);
     identityError.value = 'Unable to load identity keys.';
