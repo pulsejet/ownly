@@ -7,7 +7,6 @@ package app
 
 import (
 	"fmt"
-	"time"
 
 	enc "github.com/named-data/ndnd/std/encoding"
 	"github.com/named-data/ndnd/std/log"
@@ -24,7 +23,10 @@ func (a *App) applyPendingRevocations(certName enc.Name, certWire []byte) {
 	if a == nil || a.bootSyncSession == nil || a.bootSyncSession.revokedCerts == nil {
 		return
 	}
-	rec, ok := a.bootSyncSession.revokedCerts.resolvePendingByHash(certName, certWire)
+	if !tlv.IsWkspKeyCertName(certName) {
+		return
+	}
+	rec, ok := a.bootSyncSession.revokedCerts.lookupByHash(tlv.HashCertBytes(certWire))
 	if !ok {
 		return
 	}
@@ -37,8 +39,12 @@ func (a *App) applyPendingRevocations(certName enc.Name, certWire []byte) {
 
 // demoteCert marks the cert untrusted. The cert stays in the local
 // store so list_identity_keys still returns the peer row (the
-// [REVOKED] badge in IdentityKeyManager needs the row). Trust
+// [REVOKED] badge in WorkspaceMembers needs the row). Trust
 // validation goes through the keychain, which is deleted.
+//
+// TODO: the keychain delete path belongs to ndnd; once the upstream
+// revoke branch is merged, switch to a keychain-side revocation
+// store rather than deleting + retaining the cert locally.
 func (a *App) demoteCert(certName enc.Name) error {
 	if a.store == nil {
 		return fmt.Errorf("store not initialized")
@@ -76,19 +82,23 @@ func publishRevocationToAlo(
 	alo *ndn_sync.SvsALO,
 	wkspName enc.Name,
 	certName enc.Name,
-	certWire []byte,
+	certWire enc.Wire,
 	reason uint8,
 	invalidityTime uint64,
 ) (string, enc.Wire, error) {
-	if len(certWire) == 0 {
+	certBytes := certWire.Join()
+	if len(certBytes) == 0 {
 		return "", nil, fmt.Errorf("cert wire bytes are empty")
 	}
 	if len(certName) == 0 {
 		return "", nil, fmt.Errorf("cert name is empty")
 	}
+	if !tlv.IsWkspKeyCertName(certName) {
+		return "", nil, fmt.Errorf("can only revoke wkspKey certs (path must contain /wksp/ and /KEY/), got %s", certName)
+	}
 	effective := invalidityTime
 	if reason == reasonKeyCompromise && effective == 0 {
-		certData, _, parseErr := spec.Spec{}.ReadData(enc.NewWireView(enc.Wire{certWire}))
+		certData, _, parseErr := spec.Spec{}.ReadData(enc.NewWireView(certWire))
 		if parseErr != nil {
 			log.Warn(nil, "keyCompromise default: cert parse failed; falling through to InvalidityTime=0", "err", parseErr)
 		} else if certData.Signature() != nil {
@@ -100,7 +110,7 @@ func publishRevocationToAlo(
 	rev := &tlv.Revocation{
 		Reason:         reason,
 		InvalidityTime: effective,
-		CertHash:       tlv.HashCertBytes(certWire),
+		CertHash:       tlv.HashCertBytes(certBytes),
 		CertName:       certName,
 	}
 	tlvBytes, err := tlv.EncodeRevocationBytes(rev)
@@ -111,10 +121,10 @@ func publishRevocationToAlo(
 	if err != nil {
 		return "", nil, fmt.Errorf("publish revocation: %w", err)
 	}
-	revName, err := tlv.BuildRevocationName(wkspName, certWire)
+	revName, err := tlv.BuildRevocationName(wkspName, certBytes)
 	if err != nil {
 		log.Warn(nil, "Failed to build canonical revocation name", "err", err)
-		return tlv.HashCert(certWire), state, nil
+		return certName.String(), state, nil
 	}
 	return revName.String(), state, nil
 }
@@ -132,10 +142,11 @@ func (a *App) reshootSecurityConfig() {
 
 // handleRevocationPub processes a SVS publication that may be a
 // Revocation record (0xD4 first byte). Returns true if the pub was
-// handled (caller should continue to the next pub). Only the owner
-// publisher ("32=owner") is honored; non-owner revocations are
-// rejected with a warning. Unknown-cert revocations are accepted
-// and resolved when the cert arrives via applyPendingRevocations.
+// handled (caller should continue to the next pub). Only publications
+// from the workspace owner's SVS ALO instance are honored; non-owner
+// revocations are rejected with a warning. Unknown-cert revocations
+// are accepted and resolved when the cert arrives via
+// applyPendingRevocations.
 func (a *App) handleRevocationPub(pub ndn_sync.SvsPub) bool {
 	contentBytes := pub.Content.Join()
 	if len(contentBytes) == 0 || contentBytes[0] != byte(tlv.RevocationTLVType) {
@@ -151,21 +162,21 @@ func (a *App) handleRevocationPub(pub ndn_sync.SvsPub) bool {
 		log.Warn(nil, "Failed to decode revocation", "err", err)
 		return true
 	}
+	if !tlv.IsWkspKeyCertName(rev.CertName) {
+		log.Warn(nil, "Rejecting revocation: target is not a wkspKey",
+			"name", rev.CertName)
+		return true
+	}
 	rec := &RevocationRecord{
 		Reason:         rev.Reason,
 		InvalidityTime: rev.InvalidityTime,
 		CertHash:       rev.CertHash,
-		Publisher:      pub.Publisher,
-		BootTime:       pub.BootTime,
-		SeqNum:         pub.SeqNum,
-		ReceivedAt:     time.Now(),
+		CertName:       rev.CertName,
 	}
 	if a.bootSyncSession != nil && a.bootSyncSession.revokedCerts != nil {
-		a.bootSyncSession.revokedCerts.record(rec, rev.CertName)
+		a.bootSyncSession.revokedCerts.record(rec)
 	}
 	if demoteErr := a.demoteCert(rev.CertName); demoteErr != nil {
-		// Cert not in local store yet. applyPendingRevocations
-		// will demote when the cert arrives via the cert-insert path.
 		log.Info(nil, "Cached revocation for unknown cert", "name", rev.CertName, "err", demoteErr)
 	} else {
 		a.emitCertRevoked(rev.CertName, rec)

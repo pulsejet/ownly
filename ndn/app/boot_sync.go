@@ -557,7 +557,7 @@ func (a *App) ownerSub(client ndn.Client, wkspName enc.Name, rootSigner ndn.Sign
 					log.Warn(a, "Skipping eph revoke: failed to parse piggybacked identity cert", "err", readErr)
 				} else if _, ephState, ephErr := publishRevocationToAlo(
 					a.bootSyncSession.alo, wkspName, ephData.Name(),
-					msg.BootJoin.InviteeIdCert, 5, 0,
+					enc.Wire{msg.BootJoin.InviteeIdCert}, 5, 0,
 				); ephErr != nil {
 					log.Warn(a, "Failed to publish ephemeral-cert revocation", "err", ephErr, "name", ephData.Name())
 				} else {

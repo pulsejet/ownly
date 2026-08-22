@@ -17,7 +17,6 @@ import (
 	"github.com/named-data/ndnd/std/security/keychain"
 	"github.com/named-data/ndnd/std/security/trust_schema"
 	jsutil "github.com/named-data/ndnd/std/utils/js"
-	"github.com/pulsejet/ownly/ndn/app/tlv"
 )
 
 type SessionCipher struct {
@@ -401,7 +400,7 @@ func (a *App) JsApi() js.Value {
 			return nil, nil
 		}),
 
-		// list_revocations(): Promise<Array<{cert_name; reason; invalidity_time; cert_hash; publisher; boot_time; seq_num}>>;
+		// list_revocations(): Promise<Array<{cert_name; reason; invalidity_time; cert_hash}>>;
 		"list_revocations": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
 			out := js.Global().Get("Array").New()
 			if a.bootSyncSession == nil || a.bootSyncSession.revokedCerts == nil {
@@ -412,10 +411,7 @@ func (a *App) JsApi() js.Value {
 					"cert_name":       e.Name.String(),
 					"reason":          int(e.Rec.Reason),
 					"invalidity_time": int(e.Rec.InvalidityTime),
-					"cert_hash":       tlv.HashBytesToBase32(e.Rec.CertHash),
-					"publisher":       e.Rec.Publisher.String(),
-					"boot_time":       int(e.Rec.BootTime),
-					"seq_num":         int(e.Rec.SeqNum),
+					"cert_hash":       encHex(e.Rec.CertHash),
 				}))
 			}
 			return out, nil
@@ -461,9 +457,12 @@ func (a *App) JsApi() js.Value {
 }
 
 // resolveCertWire looks up a cert's wire bytes in the local store.
-// Falls back to a prefix match so legacy key+cert combined names
-// also resolve.
-func (a *App) resolveCertWire(certName enc.Name) ([]byte, error) {
+// Falls back to a prefix match on certName.Prefix(-1) for backward
+// compatibility with earlier app builds that stored certs under a
+// combined "key+cert" NDN name (one extra component past the
+// cert's logical name). The exact match is the v1+ path; the prefix
+// match is the compatibility path for certs written by an older build.
+func (a *App) resolveCertWire(certName enc.Name) (enc.Wire, error) {
 	wire, err := a.store.Get(certName, false)
 	if err != nil || wire == nil {
 		if len(certName) > 0 {
@@ -473,7 +472,7 @@ func (a *App) resolveCertWire(certName enc.Name) ([]byte, error) {
 	if err != nil || wire == nil {
 		return nil, fmt.Errorf("cert wire bytes not found: %s", certName)
 	}
-	return wire, nil
+	return enc.Wire{wire}, nil
 }
 
 func getTrustConfig(keychain ndn.KeyChain) (trust *security.TrustConfig, err error) {

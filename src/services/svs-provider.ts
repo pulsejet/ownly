@@ -213,9 +213,6 @@ export class SvsProvider {
             invalidity_time: pub.invalidity_time,
             cert_hash: pub.cert_hash,
             cert_name: pub.cert_name,
-            publisher: pub.publisher,
-            boot_time: pub.boot_time,
-            seq_num: pub.seq_num,
           });
         }
       },

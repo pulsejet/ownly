@@ -17,10 +17,7 @@ function rec(overrides: Partial<RevocationRecord> = {}): RevocationRecord {
     reason: ReasonCode.PrivilegeWithdrawn,
     invalidityTime: 0,
     certHash: 'AAAA',
-    certName: '/alice',
-    publisher: '/master',
-    bootTime: 1,
-    seqNum: 1,
+    certName: '/alice/wksp/alice/KEY/k1/self/v=1',
     ...overrides,
   };
 }
@@ -61,19 +58,16 @@ describe('registerOnCertRevoked bridge', () => {
       reason: ReasonCode.KeyCompromise,
       invalidity_time: 42,
       cert_hash: 'Q',
-      cert_name: '/bob/KEY/k/v=1',
-      publisher: '/m',
-      boot_time: 1,
-      seq_num: 1,
+      cert_name: '/bob/wksp/bob/KEY/k/v=1',
     })
     expect(handler).toHaveBeenCalledOnce()
     const got = handler.mock.calls[0][0]
     expect(got.reason).toBe(ReasonCode.KeyCompromise)
     expect(got.invalidityTime).toBe(42)
     expect(got.certHash).toBe('Q')
-    expect(got.certName).toBe('/bob/KEY/k/v=1')
+    expect(got.certName).toBe('/bob/wksp/bob/KEY/k/v=1')
     unregister()
-    GlobalBus.emit('cert-revoked', { reason: 0, invalidity_time: 0, cert_hash: 'X', cert_name: '', publisher: '', boot_time: 0, seq_num: 0 })
+    GlobalBus.emit('cert-revoked', { reason: 0, invalidity_time: 0, cert_hash: 'X', cert_name: '' })
     expect(handler).toHaveBeenCalledOnce()
   })
 })

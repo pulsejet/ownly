@@ -1,47 +1,53 @@
 // Per-workspace revocation state.
 //
 // The state lives in memory only; revocations are re-received from
-// SVS on workspace reopen. Three indexes, all guarded by RWMutex:
-//   - revokedByCertName   drop check by cert NDN name
-//   - revokedByHash       backfill when cert arrives after revocation
-//   - revokedByPublisher  drop check by SVS publisher name
+// SVS on workspace reopen. One index, keyed by CertName, all guarded
+// by RWMutex.
 //
-// Latest-wins on SVS sequence number so out-of-order deliveries
-// never clobber a newer record.
+// v2: dropped the 3-map (certName / hash / publisher) design from v1
+// in favor of a single map. The "negative cert" pattern is gone:
+// revocation is just a record in this map. Pubs signed by a revoked
+// cert fail to validate against the keychain (which had its trust
+// anchor deleted in demoteCert), so the drop-check at workspace.go
+// is unnecessary in the normal case. We keep a hash lookup for the
+// applyPendingRevocations path (cert inserted after revocation).
 
 package app
 
 import (
 	"sync"
-	"time"
 
 	enc "github.com/named-data/ndnd/std/encoding"
-	"github.com/pulsejet/ownly/ndn/app/tlv"
 )
 
 type RevocationRecord struct {
 	Reason         uint8
 	InvalidityTime uint64
 	CertHash       []byte
-	Publisher      enc.Name
-	BootTime       uint64
-	SeqNum         uint64
-	ReceivedAt     time.Time
+	CertName       enc.Name
 }
 
 type revocationState struct {
-	mu                  sync.RWMutex
-	revokedByCertName   map[string]*RevocationRecord
-	revokedByHash       map[string]*RevocationRecord
-	revokedByPublisher  map[string]*RevocationRecord
+	mu      sync.RWMutex
+	revoked map[string]*RevocationRecord
 }
 
 func newRevocationState() *revocationState {
 	return &revocationState{
-		revokedByCertName:  make(map[string]*RevocationRecord),
-		revokedByHash:      make(map[string]*RevocationRecord),
-		revokedByPublisher: make(map[string]*RevocationRecord),
+		revoked: make(map[string]*RevocationRecord),
 	}
+}
+
+// record stores a revocation, overwriting any prior record for the
+// same CertName. SVS delivers pubs in total order, so re-deliveries
+// just refresh the same record.
+func (s *revocationState) record(rec *RevocationRecord) {
+	if s == nil || rec == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revoked[rec.CertName.TlvStr()] = rec
 }
 
 func (s *revocationState) isRevoked(certName enc.Name) bool {
@@ -50,88 +56,47 @@ func (s *revocationState) isRevoked(certName enc.Name) bool {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.revokedByCertName[certName.TlvStr()]
+	_, ok := s.revoked[certName.TlvStr()]
 	return ok
 }
 
-func (s *revocationState) publisherIsRevoked(publisher enc.Name) bool {
-	if s == nil {
-		return false
-	}
-	if publisher.TlvStr() == "" {
-		return false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	_, ok := s.revokedByPublisher[publisher.TlvStr()]
-	return ok
-}
-
-// record stores a revocation. Refuses to overwrite a record with a
-// higher stored SVS sequence number. If certName is empty (the
-// cert is not in our keychain yet), only the by-hash index is
-// populated; the by-name and by-publisher indexes are filled in by
-// resolvePendingByHash when the cert later arrives.
-func (s *revocationState) record(rec *RevocationRecord, certName enc.Name) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(certName) > 0 {
-		key := certName.TlvStr()
-		if existing, ok := s.revokedByCertName[key]; ok && existing.SeqNum > rec.SeqNum {
-			return
-		}
-		s.revokedByCertName[key] = rec
-		if pub, ok := extractPublisher(certName); ok {
-			s.revokedByPublisher[pub] = rec
-		}
-	}
-	if len(rec.CertHash) > 0 {
-		s.revokedByHash[string(rec.CertHash)] = rec
-	}
-}
-
-func (s *revocationState) resolvePendingByHash(certName enc.Name, certWire []byte) (*RevocationRecord, bool) {
-	if s == nil || len(certName) == 0 || len(certWire) == 0 {
-		return nil, false
-	}
-	hashBytes := tlv.HashCertBytes(certWire)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec, ok := s.revokedByHash[string(hashBytes)]
-	if !ok {
-		return nil, false
-	}
-	if len(rec.CertHash) == 0 {
-		rec.CertHash = hashBytes
-	}
-	s.revokedByCertName[certName.TlvStr()] = rec
-	if pub, ok := extractPublisher(certName); ok {
-		s.revokedByPublisher[pub] = rec
-	}
-	return rec, true
-}
-
-func (s *revocationState) pendingByHash(certHash []byte) (*RevocationRecord, bool) {
-	if s == nil {
+// lookupByHash finds a pending revocation for a cert that just arrived,
+// by its SHA-256 hash. Returns the record + true if found.
+func (s *revocationState) lookupByHash(hash []byte) (*RevocationRecord, bool) {
+	if s == nil || len(hash) == 0 {
 		return nil, false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rec, ok := s.revokedByHash[string(certHash)]
-	return rec, ok
+	for _, rec := range s.revoked {
+		if bytesEq(rec.CertHash, hash) {
+			return rec, true
+		}
+	}
+	return nil, false
 }
 
+func bytesEq(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// list returns all revocations in arbitrary order.
 func (s *revocationState) list() []*RevocationRecord {
 	if s == nil {
 		return nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*RevocationRecord, 0, len(s.revokedByCertName))
-	for _, rec := range s.revokedByCertName {
+	out := make([]*RevocationRecord, 0, len(s.revoked))
+	for _, rec := range s.revoked {
 		out = append(out, rec)
 	}
 	return out
@@ -145,12 +110,10 @@ func (s *revocationState) listWithName() []revocationListEntry {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]revocationListEntry, 0, len(s.revokedByCertName))
-	for nameStr, rec := range s.revokedByCertName {
+	out := make([]revocationListEntry, 0, len(s.revoked))
+	for nameStr, rec := range s.revoked {
 		name, err := enc.NameFromTlvStr(nameStr)
 		if err != nil {
-			// State corruption: skip rather than panic. The next
-			// receive will repopulate the index.
 			continue
 		}
 		out = append(out, revocationListEntry{Name: name, Rec: rec})
@@ -163,20 +126,6 @@ type revocationListEntry struct {
 	Rec  *RevocationRecord
 }
 
-// extractPublisher returns the SVS publisher portion of a cert
-// name: everything before the `KEY` component.
-func extractPublisher(certName enc.Name) (string, bool) {
-	if len(certName) == 0 {
-		return "", false
-	}
-	for i, comp := range certName {
-		if string(comp.Val) == "KEY" && i > 0 {
-			return certName[:i].TlvStr(), true
-		}
-	}
-	return "", false
-}
-
 // certRevokedPayload builds the JS-callback payload for a revocation.
 func certRevokedPayload(certName enc.Name, rec *RevocationRecord) map[string]any {
 	certNameStr := ""
@@ -186,11 +135,22 @@ func certRevokedPayload(certName enc.Name, rec *RevocationRecord) map[string]any
 	return map[string]any{
 		"reason":          int(rec.Reason),
 		"invalidity_time": int(rec.InvalidityTime),
-		"cert_hash":       tlv.HashBytesToBase32(rec.CertHash),
+		"cert_hash":       encHex(rec.CertHash),
 		"cert_name":       certNameStr,
-		"publisher":       rec.Publisher.String(),
-		"boot_time":       int(rec.BootTime),
-		"seq_num":         int(rec.SeqNum),
-		"received_at":     time.Now().UnixMicro(),
 	}
+}
+
+// encHex hex-encodes a byte slice for JSON transport. Using hex
+// instead of the old base32 (the cert hash is opaque to the UI).
+func encHex(b []byte) string {
+	const hex = "0123456789abcdef"
+	if len(b) == 0 {
+		return ""
+	}
+	out := make([]byte, len(b)*2)
+	for i, c := range b {
+		out[i*2] = hex[c>>4]
+		out[i*2+1] = hex[c&0x0F]
+	}
+	return string(out)
 }

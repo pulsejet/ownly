@@ -1626,13 +1626,13 @@ func (a *App) SvsAloJs(
 				refreshPongs := js.Global().Get("Array").New()
 
 				for _, pub := range pubs {
-					// Drop publications from revoked publishers BEFORE
-					// the message-type switch. This is the Sync DoS fix.
-					if a.bootSyncSession != nil && a.bootSyncSession.revokedCerts != nil &&
-						a.bootSyncSession.revokedCerts.publisherIsRevoked(pub.Publisher) {
-						continue
-					}
-
+					// In v2 the revocation map is keyed by wkspKey
+					// CertName (not by SVS publisher), so there is no
+					// fast drop check on pub.Publisher. Trust
+					// validation against the keychain (where
+					// demoteCert removed the anchor) handles the
+					// Sync DoS path: any pub signed by a revoked
+					// cert's key fails trust.Verify downstream.
 					if a.handleRevocationPub(pub) {
 						continue
 					}

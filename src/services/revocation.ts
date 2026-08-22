@@ -1,7 +1,13 @@
 /**
- * Ownly revocation service: in-memory cache of revoked certs plus
- * the snake-case -> camelCase bridge from the Go-side cert-revoked
- * event.
+ * Ownly revocation service: in-memory cache of revoked wkspKey certs
+ * plus the snake-case -> camelCase bridge from the Go-side
+ * cert-revoked event.
+ *
+ * v2: the v1 RevocationRecord had publisher / boot_time / seq_num
+ * fields from the SVS ALO publication. Those are gone. v2 keys
+ * records by cert hash (a SHA-256 hex string) and stores only the
+ * fields the UI needs: reason, invalidity time, and the cert name
+ * the record applies to.
  */
 
 import { GlobalBus } from '@/services/event-bus';
@@ -20,14 +26,10 @@ export interface RevocationRecord {
   reason: ReasonCodeValue;
   /** RFC 5280 §5.3.2; 0 = "now", or unix-us timestamp. */
   invalidityTime: number;
-  /** SHA-256 of the cert wire bytes, base32-encoded (no padding). */
+  /** SHA-256 of the cert wire bytes, hex-encoded. */
   certHash: string;
   /** Full cert NDN name; empty if the cert is unknown to us. */
   certName: string;
-  /** SVS publisher of the revocation record. */
-  publisher: string;
-  bootTime: number;
-  seqNum: number;
 }
 
 const revokedByHash = new Map<string, RevocationRecord>();
@@ -73,9 +75,6 @@ export function registerOnCertRevoked(
       invalidityTime: payload.invalidity_time,
       certHash: payload.cert_hash,
       certName: payload.cert_name,
-      publisher: payload.publisher,
-      bootTime: payload.boot_time,
-      seqNum: payload.seq_num,
     });
   };
   GlobalBus.on('cert-revoked', listener);

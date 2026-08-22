@@ -61,9 +61,10 @@ interface NDNAPI {
   export_identity_cert_by_name(certName: string): Promise<Uint8Array>;
 
   /**
-   * Revoke a peer cert. Publishes a Revocation record to the boot SVS
-   * group of the active workspace. Returns the canonical record name.
-   * Master-only.
+   * Revoke a wkspKey cert. Publishes a Revocation record to the boot
+   * SVS group of the active workspace. Returns the canonical record
+   * name. Master-only. The cert name must be a wkspKey variant
+   * (path contains /wksp/ and /KEY/) or the call fails.
    */
   revoke_cert(certName: string, reason: number, invalidityTime: number): Promise<string>;
   /**
@@ -75,18 +76,12 @@ interface NDNAPI {
     reason: number;
     invalidity_time: number;
     cert_hash: string;
-    publisher: string;
-    boot_time: number;
-    seq_num: number;
   }>>;
   /** Register a callback for cert-revoked events. */
   on_cert_revoked(cb: (certName: string, record: {
     reason: number;
     invalidity_time: number;
     cert_hash: string;
-    publisher: string;
-    boot_time: number;
-    seq_num: number;
   }) => void): Promise<void>;
 
   /** Connect to the global NDN testbed */
@@ -429,17 +424,11 @@ class NDNService {
             reason: number;
             invalidity_time: number;
             cert_hash: string;
-            publisher: string;
-            boot_time: number;
-            seq_num: number;
           }) => {
             GlobalBus.emit('cert-revoked', {
               reason: record.reason,
               invalidity_time: record.invalidity_time,
               cert_hash: record.cert_hash,
-              publisher: record.publisher,
-              boot_time: record.boot_time,
-              seq_num: record.seq_num,
               cert_name: certName,
             });
           },
