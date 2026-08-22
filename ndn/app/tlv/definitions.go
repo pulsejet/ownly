@@ -105,6 +105,11 @@ type MlsBlobRef struct {
 }
 
 // Revocation record. See revocation.go for the codec and name.
+//
+// The wire format uses raw 32-byte SHA-256 in the cert-hash field
+// (0x08 GenericNameComponent) and an NDN Timestamp component (0x38)
+// for the version. The name shape is part of the public contract.
+//
 type Revocation struct {
 	//+field:natural
 	Reason uint8 `tlv:"0x0106"`

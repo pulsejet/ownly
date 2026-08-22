@@ -1,26 +1,20 @@
 // Revocation TLV codec, hash, and canonical name.
 //
 // Wire format (type 0xD4, body has 4 sub-TLVs, all even/non-critical):
-//   0x0106 Reason         uint8   (RFC 5280 §5.3.1: 0/1/5/9 in v1)
+//   0x0106 Reason         uint8   (RFC 5280 §5.3.1: 0/1/5/9)
 //   0x0108 InvalidityTime uint64  (RFC 5280 §5.3.2; 0 = "now")
 //   0x010A CertHash       [32]byte (SHA-256 of cert wire bytes)
 //   0x010C CertName       enc.Name (raw components, no 0x07 wrapper)
 //
 // Standalone (not in zz_generated.go) so the wire format is frozen
 // without re-running gondn_tlv_gen. The struct lives in definitions.go.
-//
-// CertHash is in the body because the SVS ALO wrapper overwrites
-// the data name with `<group>/<node>/<boot>/<seq>/v=0`, so the
-// receiver cannot recover the canonical name from the publication
-// alone. CertName is in the body (per round-3 mentor feedback) so
-// receivers do not need a hash→cert lookup.
 
 package tlv
 
 import (
 	"crypto/sha256"
-	"encoding/base32"
 	"fmt"
+	"time"
 
 	enc "github.com/named-data/ndnd/std/encoding"
 )
@@ -202,27 +196,55 @@ func DecodeRevocationBytes(data []byte) (*Revocation, error) {
 	return rev, nil
 }
 
-// HashCert returns base32(SHA256(cert-wire-bytes)) with no `=` padding.
-func HashCert(certWireBytes []byte) string {
-	sum := sha256.Sum256(certWireBytes)
-	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
-}
-
 // HashCertBytes returns the raw 32-byte SHA-256 of the cert wire bytes.
 func HashCertBytes(certWireBytes []byte) []byte {
 	sum := sha256.Sum256(certWireBytes)
 	return sum[:]
 }
 
-// HashBytesToBase32 base32-encodes the given bytes (no padding).
-func HashBytesToBase32(b []byte) string {
-	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)
+// IsWkspKeyCertName returns true if name is a wkspKey variant
+// (workspace-scoped cert). Per the Ownly bootstrapping model, the
+// revocation feature only revokes wkspKeys, never idKeys. Recognized
+// forms:
+//
+//	/<email>/wksp/<email>/KEY/<kid>/<pre|self|anchor>/v=N
+//	/<wksp>/<invitee>/KEY/<eph-kid>/pre/v=1
+//	/<wksp>/32=owner/KEY/<kid>/<pre|self|anchor>/v=N
+//
+// The check is value-based (name components may be Generic or
+// Keyword depending on encoding) and requires both the /wksp/ token
+// and the /KEY/ token, plus at least two components after KEY
+// (keyid + type). This rejects the idKey form, partial names, and
+// workspace-root paths.
+func IsWkspKeyCertName(name enc.Name) bool {
+	if len(name) < 6 {
+		return false
+	}
+	hasWksp := false
+	keyIdx := -1
+	for i, c := range name {
+		switch string(c.Val) {
+		case "wksp":
+			hasWksp = true
+		case "KEY":
+			if keyIdx == -1 {
+				keyIdx = i
+			}
+		}
+	}
+	if !hasWksp || keyIdx == -1 {
+		return false
+	}
+	return len(name)-keyIdx >= 3
 }
 
-// BuildRevocationName constructs /<wksp>/boot/REVOKE/<hash>/v=<unix-us>.
-// Use BuildRevocationNameWithVersion for deterministic tests.
+// BuildRevocationName constructs
+// /<wksp>/32=boot/32=REVOKE/<raw 32-byte SHA256>/<Timestamp unix-us>.
+// The hash component is a GenericNameComponent (TLV type 0x08) carrying
+// the raw 32 bytes; the version component is a TimestampNameComponent
+// (TLV type 0x24) carrying big-endian unix-microseconds.
 func BuildRevocationName(wkspName enc.Name, certWireBytes []byte) (enc.Name, error) {
-	return BuildRevocationNameWithVersion(wkspName, certWireBytes, enc.VersionUnixMicro)
+	return BuildRevocationNameWithVersion(wkspName, certWireBytes, uint64(timeNow().UnixMicro()))
 }
 
 func BuildRevocationNameWithVersion(wkspName enc.Name, certWireBytes []byte, version uint64) (enc.Name, error) {
@@ -232,25 +254,12 @@ func BuildRevocationNameWithVersion(wkspName enc.Name, certWireBytes []byte, ver
 	if len(certWireBytes) == 0 {
 		return nil, fmt.Errorf("cert wire bytes are empty")
 	}
+	sum := sha256.Sum256(certWireBytes)
 	return wkspName.
 		Append(enc.NewKeywordComponent("boot")).
 		Append(enc.NewKeywordComponent("REVOKE")).
-		Append(enc.NewGenericComponent(HashCert(certWireBytes))).
-		WithVersion(version), nil
+		Append(enc.NewBytesComponent(enc.TypeGenericNameComponent, sum[:])).
+		Append(enc.NewNumberComponent(enc.TypeTimestampNameComponent, version)), nil
 }
 
-// ParseRevocationHash extracts the base32 hash from a revocation name.
-// Name must end in a version component.
-func ParseRevocationHash(name enc.Name) (string, error) {
-	if name == nil || len(name) == 0 {
-		return "", fmt.Errorf("name is empty")
-	}
-	if !name.At(-1).IsVersion() {
-		return "", fmt.Errorf("name does not end in a version component")
-	}
-	idx := len(name) - 2
-	if idx < 0 {
-		return "", fmt.Errorf("name too short: %d components", len(name))
-	}
-	return string(name[idx].Val), nil
-}
+func timeNow() time.Time { return time.Now() }
