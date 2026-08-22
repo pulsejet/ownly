@@ -157,6 +157,31 @@ func TestIsWkspKeyCertName(t *testing.T) {
 		{"/alice/wksp", false},
 		{"/alice/wksp/KEY", false},
 		{"/wksp/no-key-here/v=1", false},
+		// rejected (KEY in the wrong position)
+		{"/alice/wksp/alice/KEY", false},                  // KEY last, no kid
+		{"/alice/wksp/alice/KEY/k1", false},              // kid but no type
+		{"/alice/wksp/alice/KEY/k1/self", true},          // type without explicit version is a valid (version-less) wkspKey
+		{"/alice/wksp/KEY", false},                        // wksp adjacent to KEY, too short
+		{"/wksp/alice/KEY", false},                        // wksp adjacent to KEY
+		{"/wksp/KEY/k1/self/v=1", false},                  // no subject before KEY
+		// accepted (idKey that happens to contain a "wksp" generic component).
+		// The value-based check cannot distinguish a generic "wksp" in an
+		// idKey from a real wkspKey marker. The consultant flagged this
+		// as fragile; v2.1 should switch to a position-aware predicate.
+		// For v2 we accept that any name containing both "wksp" and "KEY"
+		// with >=3 components after KEY passes. In practice, no idKey
+		// in Ownly contains the literal "wksp".
+		{"/alice/KEY/k1/wksp/identity/v=1", true},
+		// accepted edge cases (owner key with 32=owner as subject)
+		{"/wksp/32=owner/KEY/k1/self/v=1", true},
+		{"/wksp/32=owner/KEY/k1/pre/v=1", true},
+		{"/wksp/32=owner/KEY/k1/anchor/v=1", true},
+		// accepted (fast-join eph cert pattern, longer subject path)
+		{"/owner/wksp/alice/KEY/eph-kid/pre/v=1", true},
+		// accepted (exactly 6 components — minimum valid shape)
+		{"/a/wksp/b/KEY/c/pre/v=1", true},
+		// accepted (more than 6 components — extra path segments allowed)
+		{"/a/b/c/wksp/d/e/KEY/k1/pre/v=1", true},
 	}
 	for _, c := range cases {
 		n, err := enc.NameFromStr(c.in)

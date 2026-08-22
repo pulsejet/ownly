@@ -79,3 +79,75 @@ describe('reasonLabel', () => {
     expect(reasonLabel(99)).toBe('reason 99')
   })
 })
+
+// End-to-end bridge: simulate the Go-side on_cert_revoked callback
+// (which fires the GlobalBus cert-revoked event with the snake_case
+// payload), and verify the WorkspaceMembers-style handler receives
+// the right camelCase record, and that the cache is updated so a
+// subsequent listRevocations() shows the new entry.
+describe('cert-revoked e2e (Go bridge → handler → cache)', () => {
+  beforeEach(clearRevocations)
+  afterEach(vi.restoreAllMocks)
+
+  it('handler + recordRevocation + lookupRevocation reflect the new state', () => {
+    const handler = vi.fn((r: RevocationRecord) => {
+      // The WorkspaceMembers component rehydrates the cache from
+      // the handler (re-emits recordRevocation, then re-reads from
+      // list_revocations). The cache is the source of truth for
+      // the [REVOKED] badge lookup.
+      recordRevocation(r)
+    })
+    const unregister = registerOnCertRevoked(handler)
+
+    // Simulate the Go-side bridge firing a cert-revoked event for a
+    // wkspKey (matches the v2 publish path which validates
+    // IsWkspKeyCertName before publishing).
+    GlobalBus.emit('cert-revoked', {
+      reason: ReasonCode.PrivilegeWithdrawn,
+      invalidity_time: 0,
+      cert_hash: 'abcdef0123456789',
+      cert_name: '/alice@example.com/wksp/alice@example.com/KEY/k1/self/v=1',
+    })
+
+    expect(handler).toHaveBeenCalledOnce()
+    expect(isRevoked('abcdef0123456789')).toBe(true)
+    const cached = lookupRevocation('abcdef0123456789')
+    expect(cached?.reason).toBe(ReasonCode.PrivilegeWithdrawn)
+    expect(cached?.certName).toBe('/alice@example.com/wksp/alice@example.com/KEY/k1/self/v=1')
+    expect(cached?.invalidityTime).toBe(0)
+
+    // A second cert-revoked for the same hash overwrites.
+    GlobalBus.emit('cert-revoked', {
+      reason: ReasonCode.KeyCompromise,
+      invalidity_time: 1_700_000_000_000_000,
+      cert_hash: 'abcdef0123456789',
+      cert_name: '/alice@example.com/wksp/alice@example.com/KEY/k1/self/v=1',
+    })
+    expect(lookupRevocation('abcdef0123456789')?.reason).toBe(ReasonCode.KeyCompromise)
+    expect(lookupRevocation('abcdef0123456789')?.invalidityTime).toBe(1_700_000_000_000_000)
+
+    unregister()
+  })
+
+  it('multiple handlers all see the event (WorkspaceMembers + any other subscriber)', () => {
+    const h1 = vi.fn()
+    const h2 = vi.fn()
+    const u1 = registerOnCertRevoked(h1)
+    const u2 = registerOnCertRevoked(h2)
+
+    GlobalBus.emit('cert-revoked', {
+      reason: ReasonCode.CessationOfOperation,
+      invalidity_time: 0,
+      cert_hash: 'multi',
+      cert_name: '/x/wksp/y/KEY/k/pre/v=1',
+    })
+
+    expect(h1).toHaveBeenCalledOnce()
+    expect(h2).toHaveBeenCalledOnce()
+    expect(h1.mock.calls[0][0].reason).toBe(ReasonCode.CessationOfOperation)
+    expect(h2.mock.calls[0][0].certHash).toBe('multi')
+
+    u1()
+    u2()
+  })
+})
