@@ -39,8 +39,8 @@ func newRevocationState() *revocationState {
 }
 
 // record stores a revocation, overwriting any prior record for the
-// same CertName. SVS delivers pubs in total order, so re-deliveries
-// just refresh the same record.
+// same CertName. The map is the source of truth; re-records refresh
+// the same entry.
 func (s *revocationState) record(rec *RevocationRecord) {
 	if s == nil || rec == nil {
 		return

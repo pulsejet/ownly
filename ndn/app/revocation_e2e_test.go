@@ -14,15 +14,9 @@ import (
 	"github.com/pulsejet/ownly/ndn/app/tlv"
 )
 
-// Reason code values from RFC 5280 §5.3.1 (kept as literals here
-// because the TLV codec has no enum constant for them; the WASM
-// side defines reasonKeyCompromise in revocation_app.go).
-const (
-	reasonUnspecified      uint8 = 0
-	reasonKeyCompromise    uint8 = 1
-	reasonCessationOfOp    uint8 = 5
-	reasonPrivilegeWithdrawn uint8 = 9
-)
+// Reason code values from RFC 5280 §5.3.1. The TLV codec has no
+// enum constant for them, so we name the ones we use here.
+const reasonPrivilegeWithdrawn uint8 = 9
 
 func mkWkspKeyName() enc.Name {
 	n, _ := enc.NameFromStr("/alice@example.com/wksp/alice@example.com/KEY/k1/self/v=1")
@@ -88,10 +82,11 @@ func TestRevocationIdKeyRejected(t *testing.T) {
 	}
 }
 
-// BuildRevocationName produces a name whose 4th component is the
-// raw 32-byte SHA-256 of the cert wire bytes (not base32), and whose
-// 5th component is the NDN Timestamp (type 0x38). This pins the wire
-// format that the v2 plan committed to.
+// BuildRevocationName pins the v2 wire format: the cert-hash
+// component is GenericNameComponent (type 0x08) carrying the raw
+// 32-byte SHA-256 of the cert wire bytes (not base32), and the
+// version component is NDN Timestamp (type 0x38) with 8 bytes of
+// big-endian unix-microseconds.
 func TestBuildRevocationNameMatchesV2Spec(t *testing.T) {
 	wksp, _ := enc.NameFromStr("/wksp/foo")
 	const ts uint64 = 1_700_000_000_000_000
@@ -142,7 +137,7 @@ func TestStateRecordAndLookupByHash(t *testing.T) {
 	// Simulate handleRevocationPub recording the revocation for an
 	// unknown cert.
 	rec := &RevocationRecord{
-		Reason:         9,
+		Reason:         reasonPrivilegeWithdrawn,
 		InvalidityTime: 0,
 		CertHash:       hash,
 		CertName:       wkspKey,
@@ -158,8 +153,8 @@ func TestStateRecordAndLookupByHash(t *testing.T) {
 	if !got.CertName.Equal(wkspKey) {
 		t.Fatalf("cert name mismatch: got %s, want %s", got.CertName, wkspKey)
 	}
-	if got.Reason != 9 {
-		t.Fatalf("reason mismatch: got %d, want 9", got.Reason)
+	if got.Reason != reasonPrivilegeWithdrawn {
+		t.Fatalf("reason mismatch: got %d, want %d", got.Reason, reasonPrivilegeWithdrawn)
 	}
 
 	// A different cert (different hash) should not be found.

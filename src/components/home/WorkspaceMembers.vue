@@ -144,14 +144,11 @@ const busy = ref(false);
 const revokeError = ref('');
 const certNameInput = ref('');
 const reasonInput = ref<number>(ReasonCode.PrivilegeWithdrawn);
-const isMasterRev = ref(0);
-const masterCheck = computed(
-  () => isMasterRev.value >= 0 && !!globalThis.ActiveWorkspace?.invite?.isMasterDevice(),
+const isMasterDevice = computed(
+  () => !!globalThis.ActiveWorkspace?.invite?.isMasterDevice(),
 );
 
 const revocations = ref<RevocationRecord[]>([]);
-
-function bumpMaster() { isMasterRev.value++; }
 
 // The Go bridge only delivers new revocations. The list_revocations
 // rehydrate runs once on open and after each publish, so the
@@ -201,7 +198,7 @@ onUnmounted(() => {
   unregisterCertRevoked();
 });
 
-const canRevoke = computed(() => masterCheck.value);
+const canRevoke = computed(() => isMasterDevice.value);
 
 const canSubmit = computed(() => {
   const name = certNameInput.value.trim();
@@ -251,10 +248,6 @@ async function onRevoke() {
     busy.value = false;
   }
 }
-
-// Re-evaluate master status on revoke events (the cache mutation
-// above may also reflect a wkspKey revocation that depends on it).
-watch(revocations, () => bumpMaster(), { deep: false });
 </script>
 
 <style scoped lang="scss">
