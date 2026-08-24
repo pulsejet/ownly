@@ -44,5 +44,6 @@ coverage
 /headless/
 
 # Local memory for AI agents
+AGENTS.md
 memory.md
 docs/bootstrap-v3-analysis.md

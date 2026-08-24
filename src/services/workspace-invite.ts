@@ -15,10 +15,13 @@ import {
 
 const MLS_STORAGE_STATE_KEY = 'mls/storage/v1';
 const MLS_GROUP_ID_STATE_KEY = 'mls/group-id/v1';
+const MLS_PENDING_STORAGE_STATE_KEY = 'mls/pending-storage/v1';
+const MLS_PENDING_KEY_PACKAGE_STATE_KEY = 'mls/pending-key-package/v1';
 const MLS_RESET_SENTINEL = '__mls_reset__';
 const MLS_PREJOIN_SESSION_ID = 'prejoin';
 const MLS_COMMIT_BROADCAST = '__mls_commit_broadcast__';
 const MLS_OWNER_RECOVERY_SESSION_PREFIX = 'owner-recovery:';
+const MLS_DEVICE_RECOVERY_SESSION_PREFIX = 'device-recovery:';
 const OWNER_CONTROL_MAP = 'owner-control';
 const OWNER_MASTER_DEVICE_ID_KEY = 'masterDeviceId';
 const OWNER_DEVICES_MAP = 'owner-devices';
@@ -31,6 +34,8 @@ export class WorkspaceInviteManager {
   private mlsClient: OpenMlsLiteClient | null = null;
   private mlsGroup: OpenMlsLiteGroup | null = null;
   private mlsInitPromise: Promise<void> | null = null;
+  private pendingKeyPackage: Uint8Array | null = null;
+  private restoredPendingMlsClient = false;
   private pendingCommitRefs: MlsRefPub[] = [];
   private pendingOwnerRecoveryKpRefs: MlsRefPub[] = [];
   private onOwnerSessionAdvanced: ((sessionId: string) => Promise<void>) | null = null;
@@ -69,16 +74,26 @@ export class WorkspaceInviteManager {
     const doc = await provider.getDoc('invite');
     const mgr = new WorkspaceInviteManager(api, wsmeta, provider, doc);
 
-    provider.setMlsCallbacks({
-      onMlsKpRef: async (pubs) => mgr.onMlsKpRefs(pubs),
-      onMlsWelcomeRef: async (pubs) => mgr.onMlsWelcomeRefs(pubs),
-      onMlsCommitRef: async (pubs) => mgr.onMlsCommitRefs(pubs),
-    });
+    try {
+      provider.setMlsCallbacks({
+        onMlsKpRef: async (pubs) => mgr.onMlsKpRefs(pubs),
+        onMlsWelcomeRef: async (pubs) => mgr.onMlsWelcomeRefs(pubs),
+        onMlsCommitRef: async (pubs) => mgr.onMlsCommitRefs(pubs),
+      });
 
-    await mgr.initializeOwnerDeviceRole();
-    await mgr.restoreMlsStateOnStartup();
+      await mgr.initializeOwnerDeviceRole();
+      await mgr.restoreMlsStateOnStartup();
+      // Welcome and Commit references may have arrived while local MLS state was
+      // being restored. Process them only after restoration is complete.
+      await provider.activateMlsCallbacks();
 
-    return mgr;
+      return mgr;
+    } catch (e) {
+      // Keep the original initialization error; this manager is not exposed if
+      // its best-effort cleanup also fails.
+      await mgr.destroy().catch(() => {});
+      throw e;
+    }
   }
 
   /**
@@ -116,6 +131,14 @@ export class WorkspaceInviteManager {
     if (!pub.session_id.startsWith(MLS_OWNER_RECOVERY_SESSION_PREFIX)) return null;
     const target = pub.session_id.slice(MLS_OWNER_RECOVERY_SESSION_PREFIX.length).trim();
     return target ? utils.normalizePath(target) : null;
+  }
+
+  private deviceRecoveryPreviousDeviceId(pub: MlsRefPub): string | null {
+    if (!pub.session_id.startsWith(MLS_DEVICE_RECOVERY_SESSION_PREFIX)) return null;
+    const deviceId = pub.session_id.slice(MLS_DEVICE_RECOVERY_SESSION_PREFIX.length).trim();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId)
+      ? deviceId
+      : null;
   }
 
   private defaultOwnerDeviceLabel(deviceId: string): string {
@@ -313,11 +336,47 @@ export class WorkspaceInviteManager {
       throw new Error(`Owner device ${targetDeviceId} is not registered`);
     }
     if (this.sharedMasterDeviceId() === targetDeviceId) {
+      if (claimingLocalDevice) {
+        await this.completeMlsRecoveryIfReady();
+      }
       return;
     }
 
     this.ownerControl.set(OWNER_MASTER_DEVICE_ID_KEY, targetDeviceId);
     await this.syncMasterDeviceFlag();
+
+    if (claimingLocalDevice) {
+      try {
+        await this.completeMlsRecoveryIfReady();
+      } catch (err) {
+        // Taking over is complete even if removal of the abandoned leaf must
+        // be retried on a later startup.
+        console.warn('Failed to clean replaced owner MLS device', err);
+      }
+    }
+  }
+
+  /** Remove the abandoned owner leaf once the replacement device is master. */
+  public async completeMlsRecoveryIfReady(): Promise<void> {
+    const previousDeviceId = this.wsmeta.mlsRecoveryPreviousDeviceId?.trim();
+    if (!previousDeviceId || !this.mlsGroup) return;
+
+    if (!this.wsmeta.owner) {
+      this.wsmeta.mlsRecoveryPreviousDeviceId = undefined;
+      await _o.stats.put(this.wsmeta.name, this.wsmeta);
+      return;
+    }
+
+    // A recovered owner stays secondary until the user explicitly makes it
+    // master. Only the master is allowed to remove the old owner leaf.
+    if (!this.isMasterDevice()) return;
+
+    if (previousDeviceId !== this.wsmeta.deviceId && this.ownerDevices.has(previousDeviceId)) {
+      await this.removeOwnerDevice(previousDeviceId);
+    }
+
+    this.wsmeta.mlsRecoveryPreviousDeviceId = undefined;
+    await _o.stats.put(this.wsmeta.name, this.wsmeta);
   }
 
   private assertOwnerCanMergeMls(action: string): void {
@@ -484,6 +543,53 @@ export class WorkspaceInviteManager {
     await this.provider.statePut(MLS_GROUP_ID_STATE_KEY, new Uint8Array());
   }
 
+  private async clearPendingMlsJoinState(): Promise<void> {
+    this.pendingKeyPackage = null;
+    this.restoredPendingMlsClient = false;
+    await this.provider.statePut(MLS_PENDING_STORAGE_STATE_KEY, new Uint8Array());
+    await this.provider.statePut(MLS_PENDING_KEY_PACKAGE_STATE_KEY, new Uint8Array());
+  }
+
+  private async restorePendingMlsJoinState(): Promise<boolean> {
+    const [snapshot, keyPackage] = await Promise.all([
+      this.provider.stateGet(MLS_PENDING_STORAGE_STATE_KEY),
+      this.provider.stateGet(MLS_PENDING_KEY_PACKAGE_STATE_KEY),
+    ]);
+
+    const hasSnapshot = this.isPersistedStatePresent(snapshot);
+    const hasKeyPackage = this.isPersistedStatePresent(keyPackage);
+    if (!hasSnapshot && !hasKeyPackage) return false;
+    if (!hasSnapshot || !hasKeyPackage) {
+      throw new Error('Incomplete pending MLS join state');
+    }
+
+    const client = await this.getMlsClient();
+    client.importStorageSnapshot(snapshot!);
+    const identity = new TextDecoder().decode(client.keyPackageIdentity(keyPackage!));
+    if (identity !== this.currentMlsIdentity()) {
+      throw new Error('Pending MLS key package belongs to another device identity');
+    }
+
+    this.pendingKeyPackage = keyPackage!;
+    this.restoredPendingMlsClient = true;
+    return true;
+  }
+
+  private async getOrCreatePendingKeyPackage(): Promise<Uint8Array> {
+    if (this.pendingKeyPackage) return this.pendingKeyPackage;
+
+    const client = await this.getMlsClient();
+    const keyPackage = client.keyPackage();
+    const snapshot = client.exportStorageSnapshot();
+
+    // Persist the private KeyPackage material before publishing its reference,
+    // so a reload can still consume the corresponding Welcome.
+    await this.provider.statePut(MLS_PENDING_STORAGE_STATE_KEY, snapshot);
+    await this.provider.statePut(MLS_PENDING_KEY_PACKAGE_STATE_KEY, keyPackage);
+    this.pendingKeyPackage = keyPackage;
+    return keyPackage;
+  }
+
   private isPersistedStatePresent(state: Uint8Array | undefined): boolean {
     return !!state && state.byteLength > 0;
   }
@@ -513,10 +619,12 @@ export class WorkspaceInviteManager {
     this.wsmeta.mlsJoinAttempts = undefined;
     this.wsmeta.mlsOwnerBootstrapped = false;
     this.wsmeta.mlsKeys = undefined;
+    this.wsmeta.mlsRecoveryPreviousDeviceId = undefined;
     this.wsmeta.ownerRecoveryHelper = undefined;
     this.wsmeta.ownerRecoveryRequestedAt = undefined;
 
     await this.clearPersistedMlsState();
+    await this.clearPendingMlsJoinState();
     await this.restoreLegacyWorkspaceKey();
     await _o.stats.put(this.wsmeta.name, this.wsmeta);
 
@@ -544,6 +652,7 @@ export class WorkspaceInviteManager {
     this.wsmeta.mlsJoinAttempts = undefined;
     this.wsmeta.mlsOwnerBootstrapped = false;
     this.wsmeta.mlsKeys = undefined;
+    this.wsmeta.mlsRecoveryPreviousDeviceId = undefined;
     this.wsmeta.ownerRecoveryHelper = undefined;
     this.wsmeta.ownerRecoveryRequestedAt = undefined;
     this.wsmeta.dsk = null;
@@ -551,6 +660,7 @@ export class WorkspaceInviteManager {
     this.wsmeta.revoked = true;
 
     await this.clearPersistedMlsState();
+    await this.clearPendingMlsJoinState();
     await _o.stats.put(this.wsmeta.name, this.wsmeta);
     GlobalBus.emit(
       'workspace-revoked',
@@ -578,6 +688,10 @@ export class WorkspaceInviteManager {
     this.mlsGroup?.free();
     this.mlsGroup = client.loadGroup(groupId!);
 
+    return true;
+  }
+
+  private async resumeRestoredMlsState(): Promise<void> {
     await this.rotateWorkspaceMlsKey();
     await this.drainPendingCommitRefs();
     await this.drainPendingOwnerRecoveryKeyPackages();
@@ -588,7 +702,6 @@ export class WorkspaceInviteManager {
       await _o.stats.put(this.wsmeta.name, this.wsmeta);
     }
     this.maybeRegisterLocalOwnerDeviceRecord();
-    return true;
   }
 
   private async drainPendingCommitRefs(): Promise<void> {
@@ -641,20 +754,98 @@ export class WorkspaceInviteManager {
   }
 
   private async restoreMlsStateOnStartup(): Promise<void> {
+    let restored: boolean;
     try {
-      const restored = await this.restoreMlsStateIfAvailable();
-      if (!restored && this.wsmeta.owner && this.isMasterDevice() && this.wsmeta.mlsOwnerBootstrapped) {
-        throw new Error('Owner MLS restore failed: missing persisted state');
-      }
+      restored = await this.restoreMlsStateIfAvailable();
     } catch (e) {
-      if (this.wsmeta.owner && this.isMasterDevice() && this.wsmeta.mlsOwnerBootstrapped) {
-        throw e;
-      }
-      console.warn('MLS restore failed; resetting join request flags', e);
+      await this.prepareLostMlsRecovery(e);
+      return;
+    }
+
+    if (restored) {
+      // Errors after the group has loaded are runtime/protocol failures, not
+      // proof that its persisted private state should be discarded.
+      await this.resumeRestoredMlsState();
+      // Full group state takes precedence; stale pre-join state can be retried
+      // on a later startup if this best-effort cleanup fails.
+      await this.clearPendingMlsJoinState().catch(() => {});
+      return;
+    }
+
+    try {
+      if (await this.restorePendingMlsJoinState()) return;
+    } catch {
+      // Import may have replaced the client's signer or other private state.
+      // Discard it before generating the fresh KeyPackage below.
+      this.mlsClient?.free();
+      this.mlsClient = null;
+      this.pendingKeyPackage = null;
+      this.restoredPendingMlsClient = false;
+      await this.clearPendingMlsJoinState();
       this.wsmeta.mlsJoinRequested = false;
       this.wsmeta.mlsJoinRequestedAt = undefined;
       await _o.stats.put(this.wsmeta.name, this.wsmeta);
     }
+
+    const previouslyJoined =
+      !!this.wsmeta.mlsOwnerBootstrapped ||
+      !!this.wsmeta.mlsKeys?.length ||
+      !!this.wsmeta.mlsRecoveryPreviousDeviceId;
+
+    if (previouslyJoined) {
+      await this.prepareLostMlsRecovery('persisted MLS group state is missing');
+      return;
+    }
+
+    // Old versions did not persist pending KeyPackage state. Allow their
+    // outstanding join to be republished by the normal startup retry.
+    if (this.wsmeta.mlsJoinRequested) {
+      this.wsmeta.mlsJoinRequested = false;
+      this.wsmeta.mlsJoinRequestedAt = undefined;
+      await _o.stats.put(this.wsmeta.name, this.wsmeta);
+    }
+  }
+
+  private async prepareLostMlsRecovery(reason: unknown): Promise<void> {
+    const currentDeviceId = this.wsmeta.deviceId?.trim();
+    if (!currentDeviceId) {
+      throw new Error('Cannot recover lost MLS state without a local device ID');
+    }
+
+    // Preserve the first abandoned identity across interrupted recovery
+    // attempts so a former master can still clean up its original leaf.
+    const previousDeviceId = this.wsmeta.mlsRecoveryPreviousDeviceId?.trim() || currentDeviceId;
+    let replacementDeviceId: string;
+    do {
+      replacementDeviceId = globalThis.crypto.randomUUID();
+    } while (replacementDeviceId === currentDeviceId);
+
+    console.warn(`Recovering from unavailable local MLS state: ${reason}`);
+    this.mlsGroup?.free();
+    this.mlsGroup = null;
+    this.mlsClient?.free();
+    this.mlsClient = null;
+    this.pendingCommitRefs = [];
+    this.pendingOwnerRecoveryKpRefs = [];
+
+    // The previous MLS leaf cannot be resumed without its private state. A new
+    // device identity prevents the replacement leaf from colliding with it.
+    this.wsmeta.deviceId = replacementDeviceId;
+    this.wsmeta.isMasterDevice = false;
+    this.wsmeta.mlsRecoveryPreviousDeviceId = previousDeviceId;
+    this.wsmeta.mlsJoinRequested = false;
+    this.wsmeta.mlsJoinRequestedAt = undefined;
+    this.wsmeta.mlsJoinAttempts = undefined;
+    this.wsmeta.mlsOwnerBootstrapped = false;
+    this.wsmeta.ownerRecoveryHelper = undefined;
+    this.wsmeta.ownerRecoveryRequestedAt = undefined;
+
+    // Keep cached MLS transport keys: they can still decrypt older content,
+    // although they cannot replace the missing MLS state machine.
+    await this.clearPersistedMlsState();
+    await this.clearPendingMlsJoinState();
+    await this.restoreLegacyWorkspaceKey();
+    await _o.stats.put(this.wsmeta.name, this.wsmeta);
   }
 
   /**
@@ -679,7 +870,21 @@ export class WorkspaceInviteManager {
     const client = await this.getMlsClient();
     this.mlsGroup?.free();
     this.mlsGroup = client.joinFromWelcome(welcome);
+
+    if (this.restoredPendingMlsClient) {
+      // Client construction creates a temporary signer before the persisted
+      // KeyPackage storage is imported. Reloading the joined group reconstructs
+      // the signer that actually belongs to the accepted KeyPackage.
+      await this.persistMlsState();
+      const groupId = this.mlsGroup.groupIdBytes();
+      this.mlsGroup.free();
+      this.mlsGroup = client.loadGroup(groupId);
+    }
+
     await this.rotateWorkspaceMlsKey(sessionId);
+    // Full group state is already persisted, so stale pre-join state is safe
+    // to clean on the next startup if this best-effort write fails.
+    await this.clearPendingMlsJoinState().catch(() => {});
     await this.drainPendingCommitRefs();
     await this.drainPendingOwnerRecoveryKeyPackages();
     this.reconcileOwnerDeviceRegistryFromMls();
@@ -688,6 +893,11 @@ export class WorkspaceInviteManager {
       this.wsmeta.ownerRecoveryHelper = undefined;
       await this.syncMasterDeviceFlag();
       await _o.stats.put(this.wsmeta.name, this.wsmeta);
+    }
+    try {
+      await this.completeMlsRecoveryIfReady();
+    } catch (err) {
+      console.warn('Failed to finish local MLS recovery cleanup', err);
     }
   }
 
@@ -732,7 +942,23 @@ export class WorkspaceInviteManager {
 
       await this.provider.svs.pub_mls_commit_ref(MLS_COMMIT_BROADCAST, commitBlob, sessionId);
       await this.provider.svs.pub_mls_welcome_ref(inviteeIdentity, welcomeBlob, sessionId);
-      await this.notifyOwnerSessionAdvanced(sessionId);
+
+      const previousDeviceId = this.deviceRecoveryPreviousDeviceId(pub);
+      let removalSessionId: string | null = null;
+      if (previousDeviceId) {
+        try {
+          removalSessionId = await this.removeReplacedMemberDevice(
+            inviteeIdentity,
+            previousDeviceId,
+            pub.publisher,
+          );
+        } catch (e) {
+          // The replacement is already admitted; stale-leaf cleanup must not
+          // suppress its Welcome or the Coredump for the add commit.
+          console.warn('Failed to remove replaced MLS member device', e);
+        }
+      }
+      await this.notifyOwnerSessionAdvanced(removalSessionId ?? sessionId);
     }
   }
 
@@ -819,8 +1045,7 @@ export class WorkspaceInviteManager {
   }
 
   public async publishKeyPackageRef(sessionId = MLS_PREJOIN_SESSION_ID): Promise<void> {
-    const client = await this.getMlsClient();
-    const kp = client.keyPackage();
+    const kp = await this.getOrCreatePendingKeyPackage();
     const identity = this.currentMlsIdentity();
     const inviteeKey = utils.escapeUrlName(identity);
     const blob = await this.provider.publishBlob(`mls-kp-${inviteeKey}`, kp);
@@ -833,7 +1058,13 @@ export class WorkspaceInviteManager {
     }
 
     try {
-      await this.publishKeyPackageRef();
+      const previousDeviceId = !this.wsmeta.owner
+        ? this.wsmeta.mlsRecoveryPreviousDeviceId?.trim()
+        : undefined;
+      const requestSessionId = previousDeviceId
+        ? `${MLS_DEVICE_RECOVERY_SESSION_PREFIX}${previousDeviceId}`
+        : MLS_PREJOIN_SESSION_ID;
+      await this.publishKeyPackageRef(requestSessionId);
       this.wsmeta.mlsJoinRequested = true;
       this.wsmeta.mlsJoinRequestedAt = Date.now();
       this.wsmeta.mlsJoinAttempts = (this.wsmeta.mlsJoinAttempts ?? 0) + 1;
@@ -927,6 +1158,42 @@ export class WorkspaceInviteManager {
       welcome,
       sessionId,
     };
+  }
+
+  private async removeReplacedMemberDevice(
+    replacementIdentity: string,
+    previousDeviceId: string,
+    publisher: string,
+  ): Promise<string | null> {
+    const replacement = parseMlsIdentity(replacementIdentity);
+    if (
+      replacement.accountId === this.workspaceOwnerAccountId() ||
+      replacement.deviceId === previousDeviceId ||
+      utils.normalizePath(publisher) !== utils.normalizePath(replacement.accountId)
+    ) {
+      return null;
+    }
+
+    const previousIdentity = encodeMlsIdentity(replacement.accountId, previousDeviceId);
+    const group = await this.getMlsGroup();
+    const indexes = group.memberIndexesByIdentity(new TextEncoder().encode(previousIdentity));
+    if (!indexes.length) return null;
+    if (indexes.includes(group.myIndex())) {
+      throw new Error('Refusing member recovery request that would remove the master device');
+    }
+
+    const { commit } = group.removeMembers(indexes);
+    group.mergePendingCommit();
+
+    const sessionId = this.currentMlsSessionId();
+    await this.rotateWorkspaceMlsKey(sessionId);
+
+    const blob = await this.provider.publishBlob(
+      `mls-commit-replace-${utils.escapeUrlName(previousIdentity)}`,
+      commit,
+    );
+    await this.provider.svs.pub_mls_commit_ref(previousIdentity, blob, sessionId);
+    return sessionId;
   }
 
   private async addOwnerRecoveryFromKeyPackage(
