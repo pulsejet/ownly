@@ -78,6 +78,10 @@ export class Workspace {
 
     // Set up workspace API and client
     let api: WorkspaceAPI | null = null;
+    let provider: SvsProvider | null = null;
+    let chat: WorkspaceChat | null = null;
+    let proj: WorkspaceProjManager | null = null;
+    let invite: WorkspaceInviteManager | null = null;
     try {
 
       api = await ndn.api.get_workspace(
@@ -117,17 +121,40 @@ export class Workspace {
         }
       }
 
-      // Create general SVS group
-      const provider = await SvsProvider.create(api, 'root');
+      // Build the root provider without starting network delivery. MLS state
+      // and callbacks must be ready before Welcome or Commit refs can arrive.
+      provider = await SvsProvider.createPaused(api, 'root');
 
       // Create general modules
-      const chat = await WorkspaceChat.create(api, provider);
-      const proj = await WorkspaceProjManager.create(api, provider);
-      const invite = await WorkspaceInviteManager.create(api, metadata, provider);
+      chat = await WorkspaceChat.create(api, provider);
+      proj = await WorkspaceProjManager.create(api, provider);
+      invite = await WorkspaceInviteManager.create(api, metadata, provider);
+      const inviteManager = invite;
+
+      const workspace = new Workspace(metadata, api, provider, chat, proj, inviteManager);
+      inviteManager.setOnOwnerSessionAdvanced(async () => {
+        await workspace.republishEncryptedState();
+      });
+      workspace.registerRefreshHandlers();
+      await api.set_on_refresh_req(workspace.currentDeviceIdentity(), async () => {
+        await workspace.republishEncryptedState();
+      });
+      if (metadata.owner) {
+        await api.set_on_mls_rst_req(workspace.currentDeviceIdentity(), async () => {
+          if (!inviteManager.isMasterDevice()) {
+            throw new Error('Only the master owner device can reset MLS state');
+          }
+          await inviteManager.resetGroupMlsState();
+        });
+      }
+
+      // All consumers are now ready, so incoming root SVS updates can be
+      // processed immediately instead of being buffered during startup.
+      await provider.start();
 
       const shouldRequestMls =
-        !(metadata.owner && metadata.isMasterDevice) &&
-        !(metadata.mlsKeys?.length) &&
+        !inviteManager.hasMlsGroup() &&
+        !(metadata.owner && inviteManager.isMasterDevice()) &&
         (
           !metadata.mlsJoinRequested ||
           !metadata.mlsJoinRequestedAt ||
@@ -136,7 +163,7 @@ export class Workspace {
 
       if (shouldRequestMls) {
         try {
-          await invite.requestMlsJoin();
+          await inviteManager.requestMlsJoin();
         } catch (e) {
           // keep workspace usable; retry next startup
           console.warn('Failed to publish MLS key package ref', e);
@@ -146,28 +173,28 @@ export class Workspace {
       }
 
 
-      const workspace = new Workspace(metadata, api, provider, chat, proj, invite);
-      invite.setOnOwnerSessionAdvanced(async () => {
-        await workspace.republishEncryptedState();
-      });
-      workspace.registerRefreshHandlers();
-      await api.set_on_refresh_req(workspace.currentDeviceIdentity(), async () => {
-        await workspace.republishEncryptedState();
-      });
-      if (metadata.owner) {
-        await api.set_on_mls_rst_req(workspace.currentDeviceIdentity(), async () => {
-          if (!invite.isMasterDevice()) {
-            throw new Error('Only the master owner device can reset MLS state');
-          }
-          await invite.resetGroupMlsState();
-        });
+      try {
+        await inviteManager.completeMlsRecoveryIfReady();
+      } catch (e) {
+        // A stale owner leaf can be removed later; it should not prevent the
+        // recovered workspace from opening.
+        console.warn('Failed to finish MLS recovery cleanup', e);
       }
       workspace.scheduleAutoOwnerRecovery();
 
       return workspace;
     } catch (e) {
-      // Clean up if we failed to start
-      api?.stop();
+      // Startup can fail after SVS has attached its route. Tear down every
+      // completed layer before allowing setup() to retry the same workspace.
+      const cleanupErrors: unknown[] = [];
+      try { await provider?.destroy(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+      try { await invite?.destroy(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+      try { await proj?.destroy(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+      try { await chat?.destroy(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+      try { await api?.stop(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+      if (cleanupErrors.length) {
+        console.warn('Workspace startup cleanup was incomplete', cleanupErrors);
+      }
       throw e;
     }
   }
@@ -177,8 +204,6 @@ export class Workspace {
    * This will stop the SVS instance and disconnect from the testbed.
    */
   public async destroy() {
-    await this.proj.destroy();
-    await this.chat.destroy();
     for (const off of this.refreshUnsubs) {
       off();
     }
@@ -191,8 +216,10 @@ export class Workspace {
     }
 
     await this.provider?.destroy();
-    await this.api?.stop();
+    await this.proj.destroy();
+    await this.chat.destroy();
     await this.invite.destroy();
+    await this.api?.stop();
 
     if (globalThis.ActiveWorkspace === this) {
       globalThis.ActiveWorkspace = null;
@@ -738,7 +765,7 @@ export class Workspace {
     } catch (e) {
       throw new Error(`No DSK, try again later when others are online: ${e}`);
     } finally {
-      rootSvs?.stop();
+      await rootSvs?.stop();
     }
   }
 

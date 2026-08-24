@@ -30,6 +30,11 @@ export class SvsProvider {
   private pendingMlsKpRefs: MlsRefPub[] = [];
   private pendingMlsWelcomeRefs: MlsRefPub[] = [];
   private pendingMlsCommitRefs: MlsRefPub[] = [];
+  private mlsDispatchTail: Promise<void> = Promise.resolve();
+  private subscribed = false;
+  private started = false;
+  private destroyed = false;
+  private startPromise: Promise<void> | null = null;
 
   private readonly refreshPingSubs = new Set<SvsAloSub<RefreshPingPub>>();
   private readonly refreshPongSubs = new Set<SvsAloSub<RefreshPongPub>>();
@@ -41,16 +46,31 @@ export class SvsProvider {
   ) {}
 
   public setMlsCallbacks(cb: {
-  onMlsKpRef?: MlsRefHandler;
-  onMlsWelcomeRef?: MlsRefHandler;
-  onMlsCommitRef?: MlsRefHandler;
+    onMlsKpRef?: MlsRefHandler;
+    onMlsWelcomeRef?: MlsRefHandler;
+    onMlsCommitRef?: MlsRefHandler;
   }) {
     if (cb.onMlsKpRef) this.onMlsKpRef = cb.onMlsKpRef;
     if (cb.onMlsWelcomeRef) this.onMlsWelcomeRef = cb.onMlsWelcomeRef;
     if (cb.onMlsCommitRef) this.onMlsCommitRef = cb.onMlsCommitRef;
+  }
 
+  /**
+   * Deliver MLS references buffered during startup. Call this only after the
+   * consumer has restored its persisted MLS state.
+   */
+  public async activateMlsCallbacks(): Promise<void> {
+    if (this.mlsCallbacksReady) return;
     this.mlsCallbacksReady = true;
-    void this.flushPendingMlsRefs();
+    await this.enqueueMlsDispatch(async () => this.flushPendingMlsRefs());
+  }
+
+  private enqueueMlsDispatch(task: () => Promise<void>): Promise<void> {
+    const run = this.mlsDispatchTail.then(task, task);
+    // Keep one rejected callback from preventing later MLS publications from
+    // being handled, while still returning the error to the current caller.
+    this.mlsDispatchTail = run.catch(() => {});
+    return run;
   }
 
   private async flushPendingMlsRefs() {
@@ -61,6 +81,9 @@ export class SvsProvider {
     if (kp.length) await this.onMlsKpRef(kp);
     if (w.length) await this.onMlsWelcomeRef(w);
     if (c.length) await this.onMlsCommitRef(c);
+    // Buffered MLS callbacks run after the original Go receive callback, so
+    // explicitly retry any publications their newly installed keys unlocked.
+    await this.svs.retry_pending_decrypts?.();
   }
 
   /**
@@ -70,12 +93,22 @@ export class SvsProvider {
    * @param project Project name
    */
   public static async create(wksp: WorkspaceAPI, project: string): Promise<SvsProvider> {
+    const provider = await SvsProvider.createPaused(wksp, project);
+    try {
+      await provider.start();
+      return provider;
+    } catch (e) {
+      // Preserve the startup error; cleanup is best effort because a partially
+      // constructed provider is never returned to the caller.
+      await provider.destroy().catch(() => {});
+      throw e;
+    }
+  }
+
+  /** Create a provider whose local database is ready but whose SVS loop is paused. */
+  public static async createPaused(wksp: WorkspaceAPI, project: string): Promise<SvsProvider> {
     const { db, svs } = await SvsProvider.createComponents(wksp, project);
-
-    const provider = new SvsProvider(db, wksp, svs);
-    await provider.start();
-
-    return provider;
+    return new SvsProvider(db, wksp, svs);
   }
 
   /**
@@ -112,25 +145,52 @@ export class SvsProvider {
    * This will stop the SVS instance and clean up all documents.
    */
   public async destroy() {
-    for (const doc of this.docs.values()) {
-      doc.destroy();
+    if (this.destroyed) return;
+    this.destroyed = true;
+
+    // If destruction races startup, wait until start settles before stopping
+    // the Go wrapper and closing its database.
+    await this.startPromise?.catch(() => {});
+
+    try {
+      // Older checked-in WASM builds block if stop() is called before start().
+      // Newer wrappers advertise that they can safely release an unstarted ALO.
+      if (this.started || this.svs.safe_stop_unstarted) {
+        await this.svs.stop();
+      }
+    } finally {
+      this.started = false;
+      // Stop network delivery before releasing objects used by its callbacks.
+      for (const doc of this.docs.values()) {
+        doc.destroy();
+      }
+      for (const bundler of this.bundlers.values()) {
+        bundler.dispose();
+      }
+      this.docs.clear();
+      this.bundlers.clear();
+      this.aware.clear();
+      await this.db.close();
     }
-    for (const bundler of this.bundlers.values()) {
-      bundler.dispose();
-    }
-    this.docs.clear();
-    this.bundlers.clear();
-    this.aware.clear();
-    await this.svs.stop();
-    await this.db.close();
   }
 
   /**
    * Start the provider.
    * This will subscribe to updates and load persisted data.
    */
-  private async start() {
-    await this.svs.subscribe({
+  public async start(): Promise<void> {
+    if (this.destroyed) throw new Error('Cannot start a destroyed SVS provider');
+    if (this.started) return;
+    if (!this.startPromise) {
+      this.startPromise = this.startInternal().finally(() => {
+        this.startPromise = null;
+      });
+    }
+    await this.startPromise;
+  }
+
+  private async startInternal(): Promise<void> {
+    if (!this.subscribed) await this.svs.subscribe({
       on_yjs_delta: async (pubs) => {
         try {
           // Persist the updates to database
@@ -166,30 +226,30 @@ export class SvsProvider {
       },
 
       on_mls_kp_ref: async (pub) => {
-          try {
-            if (!this.mlsCallbacksReady) { this.pendingMlsKpRefs.push(...pub); return; }
-            await this.onMlsKpRef(pub);
-          } catch (e) {
-            console.error('MLS kp callback failed', e);
-          }
+        try {
+          if (!this.mlsCallbacksReady) { this.pendingMlsKpRefs.push(...pub); return; }
+          await this.enqueueMlsDispatch(async () => this.onMlsKpRef(pub));
+        } catch (e) {
+          console.error('MLS kp callback failed', e);
+        }
       },
 
       on_mls_welcome_ref: async (pub) => {
-          try {
-            if (!this.mlsCallbacksReady) { this.pendingMlsWelcomeRefs.push(...pub); return; }
-            await this.onMlsWelcomeRef(pub);
-          } catch (e) {
-            console.error('MLS welcome callback failed', e);
-          }
+        try {
+          if (!this.mlsCallbacksReady) { this.pendingMlsWelcomeRefs.push(...pub); return; }
+          await this.enqueueMlsDispatch(async () => this.onMlsWelcomeRef(pub));
+        } catch (e) {
+          console.error('MLS welcome callback failed', e);
+        }
       },
 
       on_mls_commit_ref: async (pub) => {
-          try {
-            if (!this.mlsCallbacksReady) { this.pendingMlsCommitRefs.push(...pub); return; }
-            await this.onMlsCommitRef(pub);
-          } catch (e) {
-            console.error('MLS commit callback failed', e);
-          }
+        try {
+          if (!this.mlsCallbacksReady) { this.pendingMlsCommitRefs.push(...pub); return; }
+          await this.enqueueMlsDispatch(async () => this.onMlsCommitRef(pub));
+        } catch (e) {
+          console.error('MLS commit callback failed', e);
+        }
       },
 
       on_refresh_ping: async (pubs) => {
@@ -201,7 +261,9 @@ export class SvsProvider {
       },
 
     });
+    this.subscribed = true;
     await this.svs.start();
+    this.started = true;
   }
 
   public async stateGet(type: string): Promise<Uint8Array | undefined> {

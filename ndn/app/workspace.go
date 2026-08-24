@@ -29,8 +29,14 @@ import (
 	"github.com/pulsejet/ownly/ndn/app/tlv"
 )
 
-// TODO: find optimal value
-const SnapshotThreshold = 100
+const (
+	// TODO: find optimal value
+	SnapshotThreshold = 100
+
+	// Bound missing-key recovery so a peer cannot retain publications forever.
+	maxPendingDecryptPubs = 256
+	maxPendingDecryptAge  = 10 * time.Minute
+)
 
 // TODO: change this
 var repoName, _ = enc.NameFromStr("/ndnd/ucla/repo3")
@@ -1275,12 +1281,24 @@ func (a *App) SvsAloJs(
 
 	// Wrap the SVS ALO instance in a JS API
 	var svsAloJs map[string]any
+	var retryPendingDecryptPubs func()
+	started := false
+	stopped := false
+	routesAnnounced := false
 	svsAloJs = map[string]any{
-		"sync_prefix": js.ValueOf(alo.SyncPrefix().String()),
-		"data_prefix": js.ValueOf(alo.DataPrefix().String()),
+		"sync_prefix":         js.ValueOf(alo.SyncPrefix().String()),
+		"data_prefix":         js.ValueOf(alo.DataPrefix().String()),
+		"safe_stop_unstarted": js.ValueOf(true),
 
 		// start(): Promise<void>;
 		"start": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			if stopped {
+				return nil, fmt.Errorf("SVS instance has been stopped")
+			}
+			if started {
+				return nil, nil
+			}
+
 			// Announce prefixes to the network
 			for _, route := range routes {
 				client.AnnouncePrefix(ndn.Announcement{
@@ -1290,31 +1308,50 @@ func (a *App) SvsAloJs(
 				})
 				log.Info(nil, "Announcing prefix", "name", "prefix", route)
 			}
+			routesAnnounced = true
+
+			if err := alo.Start(); err != nil {
+				for _, route := range routes {
+					client.WithdrawPrefix(route, nil)
+				}
+				routesAnnounced = false
+				return nil, err
+			}
+			started = true
 
 			// Notify repo to start
 			a.ExecWithConnectivity(func() {
 				a.NotifyRepoJoin(client, alo.GroupPrefix(), alo.DataPrefix(), true)
 			})
 
-			if err := alo.Start(); err != nil {
-				return nil, err
-			}
-
 			return nil, nil
 		}),
 
 		// stop(): Promise<void>;
 		"stop": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
-			if err := alo.Stop(); err != nil {
-				return nil, err
+			if stopped {
+				return nil, nil
 			}
+			stopped = true
 
-			for _, route := range routes {
-				client.WithdrawPrefix(route, nil)
+			var stopErr error
+			if started {
+				stopErr = alo.Stop()
+				started = false
+			}
+			// A publisher callback may already be unwinding when Stop returns.
+			// Leave it a safe callable target instead of replacing it with nil.
+			retryPendingDecryptPubs = func() {}
+
+			if routesAnnounced {
+				for _, route := range routes {
+					client.WithdrawPrefix(route, nil)
+				}
+				routesAnnounced = false
 			}
 
 			jsutil.ReleaseMap(svsAloJs)
-			return nil, nil
+			return nil, stopErr
 		}),
 
 		// set_on_error(): void;
@@ -1579,6 +1616,16 @@ func (a *App) SvsAloJs(
 			return js.ValueOf(name.String()), nil
 		}),
 
+		// retry_pending_decrypts(): Promise<void>;
+		"retry_pending_decrypts": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			// MLS state can be restored outside an SVS receive callback, so callers
+			// need an explicit way to retry publications unlocked by that state.
+			if retryPendingDecryptPubs != nil {
+				retryPendingDecryptPubs()
+			}
+			return nil, nil
+		}),
+
 		// subscribe({
 		//   on_yjs_delta,
 		//   on_mls_kp_ref,
@@ -1588,8 +1635,73 @@ func (a *App) SvsAloJs(
 		//   on_refresh_pong,
 		// }): Promise<void>;
 		"subscribe": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			type pendingDecryptPub struct {
+				pub       ndn_sync.SvsPub
+				sessionID string
+				queuedAt  time.Time
+			}
+
+			pendingDecryptPubs := make([]pendingDecryptPub, 0)
+			// Index exact publications for deduplication and streams for ordering.
+			pendingDecryptKeys := make(map[string]struct{})
+			pendingDecryptStreams := make(map[string]int)
+			var deferredSvsState []byte
+
+			// Boot time distinguishes separate runs of the same publisher.
+			pendingPubKey := func(pub ndn_sync.SvsPub) string {
+				return fmt.Sprintf("%s\x00%d\x00%d", pub.Publisher.String(), pub.BootTime, pub.SeqNum)
+			}
+			pendingStreamKey := func(pub ndn_sync.SvsPub) string {
+				return fmt.Sprintf("%s\x00%d", pub.Publisher.String(), pub.BootTime)
+			}
+			rebuildPendingDecryptIndex := func() {
+				pendingDecryptKeys = make(map[string]struct{}, len(pendingDecryptPubs))
+				pendingDecryptStreams = make(map[string]int)
+				for _, pending := range pendingDecryptPubs {
+					pendingDecryptKeys[pendingPubKey(pending.pub)] = struct{}{}
+					pendingDecryptStreams[pendingStreamKey(pending.pub)]++
+				}
+			}
+			prunePendingDecryptPubs := func(now time.Time) {
+				// Filter in place and clear discarded entries so their content buffers
+				// are not retained by the queue's backing array.
+				kept := pendingDecryptPubs[:0]
+				for _, pending := range pendingDecryptPubs {
+					if now.Sub(pending.queuedAt) <= maxPendingDecryptAge {
+						kept = append(kept, pending)
+					}
+				}
+				clear(pendingDecryptPubs[len(kept):])
+				pendingDecryptPubs = kept
+				rebuildPendingDecryptIndex()
+			}
+			queuePendingDecryptPub := func(pub ndn_sync.SvsPub, sessionID string) {
+				now := time.Now()
+				prunePendingDecryptPubs(now)
+
+				key := pendingPubKey(pub)
+				if _, exists := pendingDecryptKeys[key]; exists {
+					return
+				}
+
+				// Drop the oldest publication when the retry queue is full.
+				if len(pendingDecryptPubs) >= maxPendingDecryptPubs {
+					pendingDecryptPubs[0] = pendingDecryptPub{}
+					pendingDecryptPubs = pendingDecryptPubs[1:]
+					rebuildPendingDecryptIndex()
+				}
+
+				pendingDecryptPubs = append(pendingDecryptPubs, pendingDecryptPub{
+					pub:       pub,
+					sessionID: sessionID,
+					queuedAt:  now,
+				})
+				pendingDecryptKeys[key] = struct{}{}
+				pendingDecryptStreams[pendingStreamKey(pub)]++
+			}
+
 			// Send a list of publications to the JS callback
-			sendPub := func(pubs []ndn_sync.SvsPub) {
+			sendPub := func(pubs []ndn_sync.SvsPub, enforcePendingOrder bool) {
 				yjsDeltas := js.Global().Get("Array").New()
 				mlsKpRefs := js.Global().Get("Array").New()
 				mlsWelcomeRefs := js.Global().Get("Array").New()
@@ -1602,6 +1714,18 @@ func (a *App) SvsAloJs(
 					if err != nil {
 						log.Error(nil, "Failed to parse publication", "err", err)
 						continue
+					}
+
+					if pmsg.AeadBlock != nil {
+						// Queue only missing-key ciphertext. If this publisher already
+						// has a pending entry, queue later ciphertext as well so sequence
+						// numbers cannot overtake the blocked publication.
+						sessionID := pmsg.AeadBlock.SessionID
+						streamBlocked := enforcePendingOrder && pendingDecryptStreams[pendingStreamKey(pub)] > 0
+						if streamBlocked || a.cipherForSession(sessionID) == nil {
+							queuePendingDecryptPub(pub, sessionID)
+							continue
+						}
 					}
 
 					pmsg, err = a.decryptPub(pmsg)
@@ -1743,30 +1867,92 @@ func (a *App) SvsAloJs(
 				invokeBatch("on_refresh_pong", refreshPongs)
 			}
 
+			// Retry the decryptable prefix of each publisher boot stream. A missing
+			// earlier key keeps later entries in that stream queued.
+			retryPendingDecryptPubs = func() {
+				prunePendingDecryptPubs(time.Now())
+				if len(pendingDecryptPubs) == 0 {
+					if deferredSvsState != nil {
+						jsutil.Await(persistState.Invoke(jsutil.SliceToJsArray(deferredSvsState)))
+						deferredSvsState = nil
+					}
+					return
+				}
+
+				ready := make([]ndn_sync.SvsPub, 0, len(pendingDecryptPubs))
+				remaining := make([]pendingDecryptPub, 0, len(pendingDecryptPubs))
+				blockedStreams := make(map[string]bool)
+				for _, pending := range pendingDecryptPubs {
+					streamKey := pendingStreamKey(pending.pub)
+					if blockedStreams[streamKey] || a.cipherForSession(pending.sessionID) == nil {
+						blockedStreams[streamKey] = true
+						remaining = append(remaining, pending)
+						continue
+					}
+					ready = append(ready, pending.pub)
+				}
+
+				pendingDecryptPubs = remaining
+				rebuildPendingDecryptIndex()
+				if len(ready) > 0 {
+					sendPub(ready, false)
+				}
+				if len(pendingDecryptPubs) == 0 && deferredSvsState != nil {
+					jsutil.Await(persistState.Invoke(jsutil.SliceToJsArray(deferredSvsState)))
+					deferredSvsState = nil
+				}
+			}
+
 			// Subscribe to the SVS instance
 			alo.SubscribePublisher(enc.Name{}, func(pub ndn_sync.SvsPub) {
+				retryPendingDecryptPubs()
+
 				if !pub.IsSnapshot {
-					sendPub([]ndn_sync.SvsPub{pub})
+					sendPub([]ndn_sync.SvsPub{pub}, true)
 				} else {
 					snapshot, err := svs_ps.ParseHistorySnap(enc.NewWireView(pub.Content), true)
 					if err != nil {
 						panic(err) // we encode this, so this never happens
 					}
 
-					pubs := make([]ndn_sync.SvsPub, 0, len(snapshot.Entries))
+					// MLS key transitions are published in plaintext. Process them before
+					// encrypted snapshot entries so their callbacks can install any session
+					// keys needed by the rest of this snapshot.
+					mlsTransitionPubs := make([]ndn_sync.SvsPub, 0)
+					otherPubs := make([]ndn_sync.SvsPub, 0, len(snapshot.Entries))
 					for _, entry := range snapshot.Entries {
-						pubs = append(pubs, ndn_sync.SvsPub{
+						snapshotPub := ndn_sync.SvsPub{
 							Publisher: pub.Publisher,
 							Content:   entry.Content,
 							BootTime:  pub.BootTime,
 							SeqNum:    entry.SeqNo,
-						})
-					}
-					sendPub(pubs)
-				}
+						}
 
-				// Persist state
-				jsutil.Await(persistState.Invoke(jsutil.SliceToJsArray(pub.State.Join())))
+						msg, parseErr := tlv.ParseMessage(enc.NewWireView(entry.Content), true)
+						if parseErr == nil && (msg.MlsWelcome != nil || msg.MlsCommit != nil) {
+							mlsTransitionPubs = append(mlsTransitionPubs, snapshotPub)
+						} else {
+							otherPubs = append(otherPubs, snapshotPub)
+						}
+					}
+
+					sendPub(mlsTransitionPubs, true)
+					retryPendingDecryptPubs()
+					sendPub(otherPubs, true)
+				}
+				retryPendingDecryptPubs()
+
+				// Keep the previously persisted SVS cursor while encrypted publications
+				// are pending. A restart can then fetch them again if the in-memory queue
+				// does not get a chance to drain.
+				if len(pendingDecryptPubs) == 0 {
+					jsutil.Await(persistState.Invoke(jsutil.SliceToJsArray(pub.State.Join())))
+					deferredSvsState = nil
+				} else {
+					// Save the newest cursor in memory, but do not commit it while data
+					// remains queued. A restart will then refetch the unresolved range.
+					deferredSvsState = append(deferredSvsState[:0], pub.State.Join()...)
+				}
 
 				return
 			})

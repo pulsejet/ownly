@@ -173,6 +173,8 @@ export interface SvsAloApi {
   sync_prefix: string;
   /** Data prefix of the instance */
   data_prefix: string;
+  /** Whether stop() is safe before start() has completed */
+  safe_stop_unstarted?: boolean;
 
   /** Start the SVS instance */
   start(): Promise<void>;
@@ -202,6 +204,8 @@ export interface SvsAloApi {
   pub_mls_welcome_ref(invitee: string, blobName: string, sessionId: string): Promise<string>;
   /** Publish MLS commit message for a group change */
   pub_mls_commit_ref(invitee: string, blobName: string, sessionId: string): Promise<string>;
+  /** Retry encrypted publications that were waiting for an MLS session key */
+  retry_pending_decrypts?(): Promise<void>;
 
   /** Set SVS ALO subscription callbacks */
   subscribe(params: {
