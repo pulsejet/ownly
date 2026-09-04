@@ -142,20 +142,17 @@ func (a *App) reshootSecurityConfig() {
 
 // handleRevocationPub processes a SVS publication that may be a
 // Revocation record (0xD4 first byte). Returns true if the pub was
-// handled (caller should continue to the next pub). Only publications
-// from the workspace owner's SVS ALO instance are honored; non-owner
-// revocations are rejected with a warning. Unknown-cert revocations
-// are accepted and resolved when the cert arrives via
+// handled (caller should continue to the next pub). Any SVS group
+// member may publish a revocation; the only structural filter is the
+// wkspKey target check (IsWkspKeyCertName). Publisher authorization
+// is enforced upstream via trust_config keylocator validation (see
+// the follow-up cert-store refactor). Unknown-cert revocations are
+// accepted and resolved when the cert arrives via
 // applyPendingRevocations.
 func (a *App) handleRevocationPub(pub ndn_sync.SvsPub) bool {
 	contentBytes := pub.Content.Join()
 	if len(contentBytes) == 0 || contentBytes[0] != byte(tlv.RevocationTLVType) {
 		return false
-	}
-	if !pub.Publisher.Equal(ownerPublisher) {
-		log.Warn(nil, "Rejecting revocation from non-owner publisher",
-			"publisher", pub.Publisher, "expected", ownerPublisher)
-		return true
 	}
 	rev, err := tlv.DecodeRevocationBytes(contentBytes)
 	if err != nil {

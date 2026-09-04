@@ -26,10 +26,6 @@ type bootSyncSession struct {
 	revokedCerts *revocationState
 }
 
-// ownerPublisher is the SVS publisher name of the workspace owner.
-// Revocations on the boot SVS are only honored from this publisher.
-var ownerPublisher, _ = enc.NameFromStr("32=owner")
-
 func (a *App) NewBootSyncAlo(client ndn.Client, nodeName, group enc.Name, initialState enc.Wire) (*ndn_sync.SvsALO, []enc.Name, error) {
 	alo, err := ndn_sync.NewSvsALO(ndn_sync.SvsAloOpts{
 		Name:         nodeName,
