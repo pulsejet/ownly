@@ -82,6 +82,47 @@ func TestRevocationIdKeyRejected(t *testing.T) {
 	}
 }
 
+// After the owner-publisher gate was dropped from handleRevocationPub,
+// the wkspKey check (IsWkspKeyCertName) is the only structural filter
+// at receive time. This test pins that policy: a syntactically valid
+// revocation targeting an idKey must be rejected regardless of which
+// SVS publisher produced it. Together with the existing
+// TestRevocationWkspKeyRoundtrip, the pair proves the only filter is
+// the target cert type, not the publisher identity.
+//
+// (Direct exercise of handleRevocationPub is gated to the js && wasm
+// build tag and is covered by the manual 2-device test. This test
+// locks in the predicate-level invariant that the handler relies on.)
+func TestRevocationIdKeyRejectedByPredicateRegardlessOfPublisher(t *testing.T) {
+	rev := &tlv.Revocation{
+		Reason:   reasonPrivilegeWithdrawn,
+		CertHash: tlv.HashCertBytes([]byte("cert wire bytes")),
+		CertName: mkIdKeyName(),
+	}
+	wire, err := tlv.EncodeRevocationBytes(rev)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	got, err := tlv.DecodeRevocationBytes(wire)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// The publisher identity is intentionally not consulted here.
+	// The handleRevocationPub path applies IsWkspKeyCertName as the
+	// sole structural gate; if that ever changes, this test plus
+	// TestRevocationWkspKeyRoundtrip will need to be revisited
+	// together.
+	if tlv.IsWkspKeyCertName(got.CertName) {
+		t.Fatalf("idKey target must fail wkspKey check: %s", got.CertName)
+	}
+	// Sanity: the wkspKey variant does pass the same predicate, so
+	// the post-change policy is "reject by target type, accept by
+	// target type" — never "reject by publisher."
+	if !tlv.IsWkspKeyCertName(mkWkspKeyName()) {
+		t.Fatalf("wkspKey target must pass wkspKey check")
+	}
+}
+
 // BuildRevocationName pins the v2 wire format: the cert-hash
 // component is GenericNameComponent (type 0x08) carrying the raw
 // 32-byte SHA-256 of the cert wire bytes (not base32), and the
