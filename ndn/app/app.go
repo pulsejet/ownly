@@ -64,6 +64,8 @@ type App struct {
 
 	// JS callback for owner-side participant boot join payloads.
 	bootJoinPayloadCb js.Value
+	// JS callback for cert-revoked events.
+	certRevokedCb js.Value
 }
 
 var _ndnd_store_js = js.Global().Get("_ndnd_store_js")
@@ -387,9 +389,90 @@ func (a *App) JsApi() js.Value {
 			}
 			return jsutil.SliceToJsArray(wire), nil
 		}),
+
+		// on_cert_revoked(cb): Promise<void>;
+		"on_cert_revoked": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			if len(p) == 0 || p[0].IsUndefined() || p[0].IsNull() {
+				a.certRevokedCb = js.Undefined()
+				return nil, nil
+			}
+			a.certRevokedCb = p[0]
+			return nil, nil
+		}),
+
+		// list_revocations(): Promise<Array<{cert_name; reason; invalidity_time; cert_hash}>>;
+		"list_revocations": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			out := js.Global().Get("Array").New()
+			if a.bootSyncSession == nil || a.bootSyncSession.revokedCerts == nil {
+				return out, nil
+			}
+			for _, e := range a.bootSyncSession.revokedCerts.listWithName() {
+				out.Call("push", js.ValueOf(map[string]any{
+					"cert_name":       e.Name.String(),
+					"reason":          int(e.Rec.Reason),
+					"invalidity_time": int(e.Rec.InvalidityTime),
+					"cert_hash":       encHex(e.Rec.CertHash),
+				}))
+			}
+			return out, nil
+		}),
+
+		// revoke_cert(certName, reason, invalidityTime): Promise<string>;
+		"revoke_cert": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			certName, err := enc.NameFromStr(p[0].String())
+			if err != nil {
+				return nil, fmt.Errorf("invalid cert name: %w", err)
+			}
+			if a.bootSyncSession == nil || a.bootSyncSession.alo == nil {
+				return nil, fmt.Errorf("no active workspace")
+			}
+			wkspName := a.bootSyncSession.group.Prefix(-1)
+			if a.trust.Suggest(wkspName.Append(enc.NewKeywordComponent("KD"))) == nil {
+				return nil, fmt.Errorf("not master of any workspace")
+			}
+			certWire, err := a.resolveCertWire(certName)
+			if err != nil {
+				return nil, err
+			}
+			recName, state, err := publishRevocationToAlo(
+				a.bootSyncSession.alo, wkspName, certName, certWire,
+				uint8(p[1].Int()), uint64(p[2].Int()),
+			)
+			if err != nil {
+				return nil, err
+			}
+			// Persist SVS state so the seq num survives reload; without
+			// this, list_revocations returns empty after a refresh and
+			// the next ALO publish from this device can collide with
+			// peers' view of the seq num.
+			if state != nil {
+				a.PersistBootState(state)
+			}
+			a.reshootSecurityConfig()
+			return js.ValueOf(recName), nil
+		}),
 	}
 
 	return js.ValueOf(api)
+}
+
+// resolveCertWire looks up a cert's wire bytes in the local store.
+// Falls back to a prefix match on certName.Prefix(-1) for backward
+// compatibility with earlier app builds that stored certs under a
+// combined "key+cert" NDN name (one extra component past the
+// cert's logical name). The exact match is the v1+ path; the prefix
+// match is the compatibility path for certs written by an older build.
+func (a *App) resolveCertWire(certName enc.Name) (enc.Wire, error) {
+	wire, err := a.store.Get(certName, false)
+	if err != nil || wire == nil {
+		if len(certName) > 0 {
+			wire, err = a.store.Get(certName.Prefix(-1), true)
+		}
+	}
+	if err != nil || wire == nil {
+		return nil, fmt.Errorf("cert wire bytes not found: %s", certName)
+	}
+	return enc.Wire{wire}, nil
 }
 
 func getTrustConfig(keychain ndn.KeyChain) (trust *security.TrustConfig, err error) {

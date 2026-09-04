@@ -921,7 +921,7 @@ func (a *App) GetWorkspace(groupStr string, ignoreValidity bool) (api js.Value, 
 			}
 
 			// Create JS API for SVS ALO
-			return a.SvsAloJs(client, svsAlo, p[2])
+			return a.SvsAloJs(client, svsAlo, svsAloGroup.Prefix(-1), p[2])
 		}),
 
 		// sign_and_pub_invitation(invitee: string): Promise<Uint8Array>;
@@ -1265,6 +1265,7 @@ func (a *App) setupOwner(wkspName enc.Name, identitySigner ndn.Signer) (ndn.Sign
 func (a *App) SvsAloJs(
 	client ndn.Client,
 	alo *ndn_sync.SvsALO,
+	wkspName enc.Name,
 	persistState js.Value,
 ) (api js.Value, err error) {
 	// List of SVS routes to announce
@@ -1419,6 +1420,33 @@ func (a *App) SvsAloJs(
 
 			jsutil.Await(persistState.Invoke(jsutil.SliceToJsArray(state.Join())))
 			return js.ValueOf(name.String()), nil
+		}),
+
+		// pub_revocation(certName, reason, invalidityTime): Promise<string>;
+		"pub_revocation": jsutil.AsyncFunc(func(this js.Value, p []js.Value) (any, error) {
+			certName, err := enc.NameFromStr(p[0].String())
+			if err != nil {
+				return nil, fmt.Errorf("invalid cert name: %w", err)
+			}
+			if a.trust.Suggest(wkspName.Append(enc.NewKeywordComponent("KD"))) == nil {
+				return nil, fmt.Errorf("not master: workspace anchor key not available")
+			}
+			certWire, err := a.resolveCertWire(certName)
+			if err != nil {
+				return nil, err
+			}
+			recName, state, err := publishRevocationToAlo(
+				alo, wkspName, certName, certWire,
+				uint8(p[1].Int()), uint64(p[2].Int()),
+			)
+			if err != nil {
+				return nil, err
+			}
+			if state != nil {
+				jsutil.Await(persistState.Invoke(jsutil.SliceToJsArray(state.Join())))
+			}
+			a.reshootSecurityConfig()
+			return js.ValueOf(recName), nil
 		}),
 
 		// pub_blob_fetch(name: string, encapsulate: Uint8Array | undefined): Promise<string>;
@@ -1598,6 +1626,17 @@ func (a *App) SvsAloJs(
 				refreshPongs := js.Global().Get("Array").New()
 
 				for _, pub := range pubs {
+					// In v2 the revocation map is keyed by wkspKey
+					// CertName (not by SVS publisher), so there is no
+					// fast drop check on pub.Publisher. Trust
+					// validation against the keychain (where
+					// demoteCert removed the anchor) handles the
+					// Sync DoS path: any pub signed by a revoked
+					// cert's key fails trust.Verify downstream.
+					if a.handleRevocationPub(pub) {
+						continue
+					}
+
 					pmsg, err := tlv.ParseMessage(enc.NewWireView(pub.Content), true)
 					if err != nil {
 						log.Error(nil, "Failed to parse publication", "err", err)

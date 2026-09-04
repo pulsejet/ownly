@@ -3,7 +3,8 @@ import * as awareProto from 'y-protocols/awareness.js';
 
 import * as utils from '@/utils';
 
-import type { AwarenessApi, SvsAloApi, WorkspaceAPI, RefreshPongPub, RefreshPingPub, SvsAloSub, MlsRefPub } from '@/services/ndn';
+import type { AwarenessApi, SvsAloApi, WorkspaceAPI, RefreshPongPub, RefreshPingPub, SvsAloSub, MlsRefPub, RevocationPub } from '@/services/ndn';
+import { GlobalBus } from '@/services/event-bus';
 import type { AwarenessLocalState } from '@/services/types';
 import type { ProjDb } from '@/services/database/proj_db';
 import { Bundler } from "@/utils/bundler.ts";
@@ -198,6 +199,22 @@ export class SvsProvider {
 
       on_refresh_pong: async (pubs) => {
         await this.emitBatch(this.refreshPongSubs, pubs);
+      },
+
+      on_revocation: async (pubs: RevocationPub[]) => {
+        // The Go-side on_cert_revoked callback already covers known
+        // certs; this batch handles unknown certs (received before
+        // the cert arrived in the keychain) and lets the UI cache
+        // the record. recordRevocation is latest-wins by hash, so
+        // any double-emit is harmless.
+        for (const pub of pubs) {
+          GlobalBus.emit('cert-revoked', {
+            reason: pub.reason,
+            invalidity_time: pub.invalidity_time,
+            cert_hash: pub.cert_hash,
+            cert_name: pub.cert_name,
+          });
+        }
       },
 
     });

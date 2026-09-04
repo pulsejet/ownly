@@ -21,8 +21,9 @@ import (
 )
 
 type bootSyncSession struct {
-	group enc.Name
-	alo   *ndn_sync.SvsALO
+	group        enc.Name
+	alo          *ndn_sync.SvsALO
+	revokedCerts *revocationState
 }
 
 func (a *App) NewBootSyncAlo(client ndn.Client, nodeName, group enc.Name, initialState enc.Wire) (*ndn_sync.SvsALO, []enc.Name, error) {
@@ -214,7 +215,8 @@ func (a *App) handleBootIdentityCert(data ndn.Data, dataWire enc.Wire) {
 		return
 	}
 
-	_, err := a.importPeerCerts([][]byte{dataWire.Join()}, peerCertImportOpts{
+	wireBytes := dataWire.Join()
+	_, err := a.importPeerCerts([][]byte{wireBytes}, peerCertImportOpts{
 		Published: true,
 		Group:     a.bootSyncSession.group,
 	})
@@ -222,6 +224,7 @@ func (a *App) handleBootIdentityCert(data ndn.Data, dataWire enc.Wire) {
 		log.Warn(a, "Failed to import boot peer cert", "err", err, "name", data.Name())
 		return
 	}
+	a.applyPendingRevocations(data.Name(), wireBytes)
 	log.Info(a, "Accepted boot peer identity cert", "name", data.Name())
 }
 
@@ -232,6 +235,9 @@ func (a *App) participantSub(client ndn.Client) error {
 
 	ownerName, _ := enc.NameFromStr("32=owner")
 	a.bootSyncSession.alo.SubscribePublisher(ownerName, func(pub ndn_sync.SvsPub) {
+		if a.handleRevocationPub(pub) {
+			return
+		}
 		// Parsing
 		data, _, err := spec.Spec{}.ReadData(enc.NewWireView(pub.Content))
 		if err != nil {
@@ -260,11 +266,13 @@ func (a *App) participantSub(client ndn.Client) error {
 
 		// We push every final cert we receive into the keychain, including those belong to others.
 		log.Info(a, "Received final cert", "name", data.Name())
-		if err := a.keychain.InsertCert(pub.Content.Join()); err != nil {
+		wireBytes := pub.Content.Join()
+		if err := a.keychain.InsertCert(wireBytes); err != nil {
 			log.Error(a, "Failed to insert cert", "err", err)
 			return
 		}
-		if err := client.Store().Put(data.Name(), pub.Content.Join()); err != nil {
+		a.applyPendingRevocations(data.Name(), wireBytes)
+		if err := client.Store().Put(data.Name(), wireBytes); err != nil {
 			log.Warn(a, "Failed to store final cert in local store", "err", err, "name", data.Name())
 		}
 		log.Info(a, "Inserted and stored final cert", "name", data.Name())
@@ -296,8 +304,9 @@ func (a *App) StartBootSyncParticipant(client ndn.Client, wkspName, userName enc
 		return fail(err)
 	}
 	a.bootSyncSession = &bootSyncSession{
-		group: group,
-		alo:   alo,
+		group:        group,
+		alo:          alo,
+		revokedCerts: newRevocationState(),
 	}
 
 	if err := a.ensurePeerGroup(wkspName); err != nil {
@@ -366,6 +375,9 @@ func (a *App) ownerSub(client ndn.Client, wkspName enc.Name, rootSigner ndn.Sign
 	// 1. participant join payload carrying user precert full name (+ optional app payload),
 	// 2. user final cert, 3. repo command to fetch invitation
 	a.bootSyncSession.alo.SubscribePublisher(enc.Name{}, func(pub ndn_sync.SvsPub) {
+		if a.handleRevocationPub(pub) {
+			return
+		}
 		content := pub.Content
 		// Case 1: content is a final cert (encapsulated Data).
 		contentData, _, err := spec.Spec{}.ReadData(enc.NewWireView(content))
@@ -506,6 +518,7 @@ func (a *App) ownerSub(client ndn.Client, wkspName enc.Name, rootSigner ndn.Sign
 			if err := a.keychain.InsertCert(userCert.Join()); err != nil {
 				log.Warn(a, "Failed to store final cert locally", "err", err, "name", userCertData.Name())
 			}
+			a.applyPendingRevocations(userCertData.Name(), userCert.Join())
 
 			// Keep track of user certs issued by this owner
 			if err := client.Store().Put(userCertData.Name(), userCert.Join()); err != nil {
@@ -529,6 +542,27 @@ func (a *App) ownerSub(client ndn.Client, wkspName enc.Name, rootSigner ndn.Sign
 			} else {
 				a.PersistBootState(state)
 				log.Info(a, "Published final cert", "name", "name", userCertData.Name())
+			}
+
+			// After publishing the joiner's final cert, also publish a
+			// Revocation for the joiner's ephemeral cert (reason 5,
+			// cessationOfOperation, InvalidityTime 0). Best-effort.
+			if len(msg.BootJoin.InviteeIdCert) > 0 {
+				ephData, _, readErr := spec.Spec{}.ReadData(enc.NewWireView(enc.Wire{msg.BootJoin.InviteeIdCert}))
+				if readErr != nil {
+					log.Warn(a, "Skipping eph revoke: failed to parse piggybacked identity cert", "err", readErr)
+				} else if _, ephState, ephErr := publishRevocationToAlo(
+					a.bootSyncSession.alo, wkspName, ephData.Name(),
+					enc.Wire{msg.BootJoin.InviteeIdCert}, 5, 0,
+				); ephErr != nil {
+					log.Warn(a, "Failed to publish ephemeral-cert revocation", "err", ephErr, "name", ephData.Name())
+				} else {
+					if ephState != nil {
+						a.PersistBootState(ephState)
+					}
+					a.reshootSecurityConfig()
+					log.Info(a, "Published ephemeral-cert revocation", "name", ephData.Name())
+				}
 			}
 		}
 		// Case 3: Repo blob fetch command
@@ -559,8 +593,9 @@ func (a *App) StartBootSyncOwner(client ndn.Client, wkspName enc.Name, rootSigne
 		return err
 	}
 	a.bootSyncSession = &bootSyncSession{
-		group: group,
-		alo:   alo,
+		group:        group,
+		alo:          alo,
+		revokedCerts: newRevocationState(),
 	}
 	if err := a.ensurePeerGroup(wkspName); err != nil {
 		log.Warn(a, "Failed to update peer publish index for group", "group", wkspName, "err", err)
